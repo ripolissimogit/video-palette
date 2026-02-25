@@ -9,25 +9,60 @@ const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: 'Video Palette - Real-time Color Extraction from Video',
-  description: 'Extract dominant color palettes from videos in real-time. Watch colors change as frames progress using k-means++ clustering in OKLAB space.',
-  generator: 'v0.app',
+  metadataBase: new URL('https://colorificio.app'),
+  title: {
+    default: 'VAC Video Palette',
+    template: '%s | VAC Video Palette',
+  },
+  description:
+    'Analyze video colors in real time, build dynamic palettes, and export high-quality videos with synced audio.',
+  applicationName: 'VAC Video Palette',
+  keywords: [
+    'video palette',
+    'color extraction',
+    'open graph video tool',
+    'youtube palette',
+    'video color analyzer',
+    'vac',
+  ],
+  creator: 'VAC',
+  publisher: 'VAC',
+  robots: {
+    index: true,
+    follow: true,
+  },
+  openGraph: {
+    type: 'website',
+    locale: 'en_US',
+    title: 'VAC Video Palette',
+    description:
+      'Analyze video colors in real time and export high-quality palette videos with audio.',
+    siteName: 'VAC Video Palette',
+    images: [
+      {
+        url: '/opengraph-image',
+        width: 1200,
+        height: 630,
+        alt: 'VAC Video Palette - real-time video color extraction',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'VAC Video Palette',
+    description:
+      'Real-time video color extraction with high-quality exports.',
+    images: ['/twitter-image'],
+  },
   icons: {
     icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
       {
         url: '/icon.svg',
         type: 'image/svg+xml',
       },
     ],
-    apple: '/apple-icon.png',
+    shortcut: '/icon.svg',
+    apple: '/icon.svg',
   },
 }
 

@@ -8,6 +8,8 @@ interface VideoDropzoneProps {
 }
 
 type Tab = "file" | "url";
+const JOB_POLL_INTERVAL_MS = 1500;
+const JOB_POLL_TIMEOUT_MS = 6 * 60 * 1000;
 
 // Detect YouTube URLs
 function isYouTubeUrl(url: string): boolean {
@@ -75,18 +77,70 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
     if (!infoRes.ok) {
       throw new Error(infoData?.error || `Failed to get video info (${infoRes.status})`);
     }
+    if (!infoData?.videoId) {
+      throw new Error("Missing video id from YouTube response");
+    }
 
-    // Step 2: Ask the server to prepare a merged HQ stream (video+audio)
+    // Step 2: Start async merge job and poll for readiness
     setLoadingMessage(getYouTubeLoadingMessage("stream"));
-
-    const streamRes = await fetch("/api/youtube", {
+    const jobRes = await fetch("/api/youtube/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         videoId: infoData.videoId,
-        streamUrl: infoData.streamUrl, // fallback if merge is unavailable
+        streamUrl: infoData.streamUrl,
       }),
     });
+    const jobData = await jobRes.json().catch(() => null);
+    if (!jobRes.ok || !jobData?.jobId) {
+      throw new Error(jobData?.error || `Failed to start merge job (${jobRes.status})`);
+    }
+
+    let status = jobData.status as string;
+    let statusMessage = jobData.message as string | undefined;
+    let mergedStreamUrl = jobData.streamUrl as string | null | undefined;
+    const startedAt = Date.now();
+
+    while (status !== "ready") {
+      if (status === "failed") break;
+      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
+        throw new Error("Timed out while preparing high-quality stream");
+      }
+
+      if (statusMessage) setLoadingMessage(statusMessage);
+      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+
+      const pollRes = await fetch(
+        `/api/youtube/jobs?jobId=${encodeURIComponent(jobData.jobId)}`,
+        { cache: "no-store" }
+      );
+      const pollData = await pollRes.json().catch(() => null);
+      if (!pollRes.ok) {
+        throw new Error(pollData?.error || `Merge job failed (${pollRes.status})`);
+      }
+      status = pollData?.status || "failed";
+      statusMessage = pollData?.message;
+      mergedStreamUrl = pollData?.streamUrl;
+    }
+
+    let streamRes: Response;
+    if (status === "ready") {
+      const streamUrl =
+        mergedStreamUrl || `/api/youtube/jobs?jobId=${encodeURIComponent(jobData.jobId)}&stream=1`;
+      setLoadingMessage("Downloading high-quality stream...");
+      streamRes = await fetch(streamUrl, { cache: "no-store" });
+    } else {
+      // Last-resort fallback if merge job failed.
+      if (!infoData.streamUrl) {
+        throw new Error("High-quality merge failed and no fallback stream is available");
+      }
+      setLoadingMessage("HQ merge failed, loading fallback stream...");
+      streamRes = await fetch("/api/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ streamUrl: infoData.streamUrl }),
+      });
+    }
 
     if (!streamRes.ok) {
       const errorData = await streamRes.json().catch(() => null);

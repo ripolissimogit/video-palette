@@ -89,6 +89,20 @@ function getFormatOptions(): ExportFormatOption[] {
   ];
 }
 
+function getTargetVideoBitrate(
+  width: number,
+  height: number,
+  fps: number,
+  format: ExportFormat
+): number {
+  // Bits-per-pixel tuned for visual fidelity when re-encoding through MediaRecorder.
+  const bitsPerPixel = format === "webm" ? 0.2 : 0.24;
+  const rawTarget = Math.round(width * height * fps * bitsPerPixel);
+  const min = 8_000_000;
+  const max = 65_000_000;
+  return Math.max(min, Math.min(max, rawTarget));
+}
+
 // --- Gaussian temporal smoothing ---
 // Applies a weighted moving average across the color sequence.
 // Each frame's color is the weighted average of nearby frames, using a
@@ -222,6 +236,11 @@ export function ExportPanel({
       const cropSy = Math.round(crop.top * rawH);
       const vw = rawW - cropSx - Math.round(crop.right * rawW);
       const vh = rawH - cropSy - Math.round(crop.bottom * rawH);
+      const renderUsesCrop = ratio === "instagram4x5";
+      const renderSx = renderUsesCrop ? cropSx : 0;
+      const renderSy = renderUsesCrop ? cropSy : 0;
+      const renderSw = renderUsesCrop ? vw : rawW;
+      const renderSh = renderUsesCrop ? vh : rawH;
       const fps = 15; // Analysis sample rate
       const totalFrames = Math.ceil(dur * fps);
 
@@ -253,14 +272,14 @@ export function ExportPanel({
         videoY = Math.round((videoAreaH - drawH) / 2);
         barsY = videoAreaH;
       } else {
-        canvasW = vw;
-        paletteH = Math.round(vw / colorCount);
-        canvasH = vh + paletteH;
-        drawW = vw;
-        drawH = vh;
+        canvasW = rawW;
+        paletteH = Math.round(rawW / colorCount);
+        canvasH = rawH + paletteH;
+        drawW = rawW;
+        drawH = rawH;
         videoX = 0;
         videoY = 0;
-        barsY = vh;
+        barsY = rawH;
       }
 
       // Sampling canvas for color extraction
@@ -366,7 +385,8 @@ export function ExportPanel({
       const swatchW = canvasW / colorCount;
       const hexFontSize = Math.max(10, Math.round(swatchW * 0.045));
 
-      const stream = canvas.captureStream(30);
+      const captureFps = 30;
+      const stream = canvas.captureStream(captureFps);
 
       // Capture audio from the video via Web Audio API
       video.muted = false;
@@ -377,9 +397,16 @@ export function ExportPanel({
       // Don't connect to audioCtx.destination — no playback during export
       audioDest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
 
+      const targetVideoBitrate = getTargetVideoBitrate(
+        canvasW,
+        canvasH,
+        captureFps,
+        activeFormat.id
+      );
       const recorder = new MediaRecorder(stream, {
         mimeType: activeMimeType,
-        videoBitsPerSecond: 5_000_000,
+        videoBitsPerSecond: targetVideoBitrate,
+        audioBitsPerSecond: 192_000,
       });
       recorderRef.current = recorder;
 
@@ -428,7 +455,17 @@ export function ExportPanel({
         }
 
         // 1. Draw video frame (cropped to remove letterbox)
-        ctx.drawImage(video, cropSx, cropSy, vw, vh, videoX, videoY, drawW, drawH);
+        ctx.drawImage(
+          video,
+          renderSx,
+          renderSy,
+          renderSw,
+          renderSh,
+          videoX,
+          videoY,
+          drawW,
+          drawH
+        );
 
         // 2. Get pre-smoothed colors for this exact time (NO k-means here)
         const frameColors = getColorsAtTime(now);

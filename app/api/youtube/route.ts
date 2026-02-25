@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
     // IMPORTANT: export needs a SINGLE progressive stream with both video+audio.
     // Avoid split DASH selections (bv+ba) because they often return video-only URLs.
     const formatStr =
-      "b[height<=720][ext=mp4][vcodec!=none][acodec!=none]/b[height<=720][vcodec!=none][acodec!=none]/b[ext=mp4][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]";
+      "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/b[ext=mp4][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]";
 
     const cmd = `"${ytdlp}" -j --no-download -f "${formatStr}" "https://www.youtube.com/watch?v=${videoId}"`;
 

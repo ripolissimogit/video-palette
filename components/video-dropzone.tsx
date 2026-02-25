@@ -17,7 +17,7 @@ function isYouTubeUrl(url: string): boolean {
 function getYouTubeLoadingMessage(step: "info" | "stream"): string {
   return step === "info"
     ? "Fetching video info..."
-    : "Preparing stream...";
+    : "Preparing high-quality stream...";
 }
 
 export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
@@ -76,13 +76,16 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       throw new Error(infoData?.error || `Failed to get video info (${infoRes.status})`);
     }
 
-    // Step 2: Proxy the stream through our API to avoid CORS
+    // Step 2: Ask the server to prepare a merged HQ stream (video+audio)
     setLoadingMessage(getYouTubeLoadingMessage("stream"));
 
     const streamRes = await fetch("/api/youtube", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ streamUrl: infoData.streamUrl }),
+      body: JSON.stringify({
+        videoId: infoData.videoId,
+        streamUrl: infoData.streamUrl, // fallback if merge is unavailable
+      }),
     });
 
     if (!streamRes.ok) {

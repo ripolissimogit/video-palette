@@ -1,21 +1,127 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execSync } from "child_process";
-import { existsSync, mkdirSync, chmodSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  chmodSync,
+  writeFileSync,
+  statSync,
+  createReadStream,
+  readdirSync,
+  unlinkSync,
+} from "fs";
+import { Readable } from "stream";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const YTDLP_DIR = "/tmp/ytdlp-bin";
 const YTDLP_PATH = `${YTDLP_DIR}/yt-dlp`;
 const YTDLP_URL =
   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+const YT_CACHE_DIR = "/tmp/youtube-cache";
+const YT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+function ensureDir(path: string) {
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true });
+  }
+}
+
+function isValidVideoId(videoId: string): boolean {
+  return /^[a-zA-Z0-9_-]{11}$/.test(videoId);
+}
+
+function ensureFfmpeg(): void {
+  execSync("ffmpeg -version", { stdio: "ignore" });
+}
+
+function getMergedVideoPath(videoId: string): string {
+  return `${YT_CACHE_DIR}/${videoId}.mp4`;
+}
+
+function isFreshCacheFile(filePath: string): boolean {
+  if (!existsSync(filePath)) return false;
+  const st = statSync(filePath);
+  if (st.size <= 0) return false;
+  return Date.now() - st.mtimeMs < YT_CACHE_TTL_MS;
+}
+
+function cleanupOldCachedVideos() {
+  if (!existsSync(YT_CACHE_DIR)) return;
+  const now = Date.now();
+  for (const entry of readdirSync(YT_CACHE_DIR)) {
+    if (!entry.endsWith(".mp4")) continue;
+    const fullPath = `${YT_CACHE_DIR}/${entry}`;
+    try {
+      const st = statSync(fullPath);
+      if (now - st.mtimeMs > YT_CACHE_TTL_MS) {
+        unlinkSync(fullPath);
+      }
+    } catch {
+      // Ignore stale file cleanup errors.
+    }
+  }
+}
+
+async function ensureMergedVideo(videoId: string): Promise<string> {
+  ensureDir(YT_CACHE_DIR);
+  cleanupOldCachedVideos();
+
+  const mergedPath = getMergedVideoPath(videoId);
+  if (isFreshCacheFile(mergedPath)) {
+    return mergedPath;
+  }
+
+  const ytdlp = await ensureYtDlp();
+  ensureFfmpeg();
+
+  if (existsSync(mergedPath)) {
+    unlinkSync(mergedPath);
+  }
+
+  const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const formatStr =
+    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+  const cmd =
+    `"${ytdlp}" --no-playlist --no-progress --no-warnings ` +
+    `-f "${formatStr}" --merge-output-format mp4 ` +
+    `--output "${mergedPath}" "${sourceUrl}"`;
+
+  console.log("[youtube] Downloading and merging with ffmpeg:", videoId);
+  execSync(cmd, {
+    encoding: "utf-8",
+    timeout: 4 * 60_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  if (!existsSync(mergedPath) || statSync(mergedPath).size <= 0) {
+    throw new Error("Merged video file was not created");
+  }
+
+  return mergedPath;
+}
+
+function streamLocalMp4(filePath: string): NextResponse {
+  const st = statSync(filePath);
+  const nodeStream = createReadStream(filePath);
+  const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+
+  return new NextResponse(webStream, {
+    status: 200,
+    headers: {
+      "Content-Type": "video/mp4",
+      "Content-Length": String(st.size),
+      "Cache-Control": "public, max-age=3600",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
 
 // Ensure yt-dlp binary is available in /tmp
 async function ensureYtDlp(): Promise<string> {
   if (existsSync(YTDLP_PATH)) return YTDLP_PATH;
 
-  if (!existsSync(YTDLP_DIR)) {
-    mkdirSync(YTDLP_DIR, { recursive: true });
-  }
+  ensureDir(YTDLP_DIR);
 
   console.log("[youtube] Downloading yt-dlp binary...");
   const res = await fetch(YTDLP_URL);
@@ -111,21 +217,11 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (!streamUrl) {
-      return NextResponse.json(
-        {
-          error:
-            "No stream URL found. The video may be restricted or unavailable.",
-        },
-        { status: 404 }
-      );
-    }
-
     return NextResponse.json({
       videoId,
       title,
       duration,
-      streamUrl,
+      streamUrl: streamUrl || null,
       width,
       height,
       hasAudio: acodec !== "none",
@@ -158,19 +254,49 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/youtube - proxies the stream to avoid CORS
+// POST /api/youtube
+// Preferred mode: download bestvideo+bestaudio and merge server-side with ffmpeg.
+// Fallback mode: proxy a single stream URL.
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
-  const streamUrl = body?.streamUrl;
+  const videoId =
+    typeof body?.videoId === "string" ? body.videoId.trim() : "";
+  const streamUrl =
+    typeof body?.streamUrl === "string" ? body.streamUrl.trim() : "";
 
-  if (!streamUrl) {
-    return NextResponse.json(
-      { error: "Missing streamUrl" },
-      { status: 400 }
-    );
+  if (!videoId && !streamUrl) {
+    return NextResponse.json({ error: "Missing videoId or streamUrl" }, { status: 400 });
   }
 
   try {
+    if (videoId) {
+      if (!isValidVideoId(videoId)) {
+        return NextResponse.json({ error: "Invalid videoId" }, { status: 400 });
+      }
+
+      try {
+        const mergedPath = await ensureMergedVideo(videoId);
+        return streamLocalMp4(mergedPath);
+      } catch (mergeError) {
+        console.error("[youtube] Merge failed, falling back to direct stream proxy", mergeError);
+        if (!streamUrl) {
+          const message =
+            mergeError instanceof Error ? mergeError.message : "Unknown merge error";
+          return NextResponse.json(
+            { error: `Failed to prepare merged video: ${message}` },
+            { status: 500 }
+          );
+        }
+      }
+    }
+
+    if (!streamUrl) {
+      return NextResponse.json(
+        { error: "Missing streamUrl for fallback" },
+        { status: 400 }
+      );
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 55000);
 

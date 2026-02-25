@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Upload, Film, Link, Loader2, AlertCircle } from "lucide-react";
 
 interface VideoDropzoneProps {
@@ -10,6 +10,16 @@ interface VideoDropzoneProps {
 type Tab = "file" | "url";
 const JOB_POLL_INTERVAL_MS = 1500;
 const JOB_POLL_TIMEOUT_MS = 6 * 60 * 1000;
+const YT_PENDING_JOB_KEY = "yt_pending_merge_job_v1";
+
+interface PendingYouTubeJob {
+  jobId: string;
+  videoId: string;
+  title: string;
+  fallbackStreamUrl: string | null;
+  sourceUrl: string;
+  startedAt: number;
+}
 
 // Detect YouTube URLs
 function isYouTubeUrl(url: string): boolean {
@@ -30,6 +40,116 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
   const [urlError, setUrlError] = useState("");
   const [loadingMessage, setLoadingMessage] = useState("Loading");
   const inputRef = useRef<HTMLInputElement>(null);
+  const resumeStartedRef = useRef(false);
+
+  const savePendingJob = useCallback((job: PendingYouTubeJob) => {
+    if (typeof window === "undefined") return;
+    sessionStorage.setItem(YT_PENDING_JOB_KEY, JSON.stringify(job));
+  }, []);
+
+  const clearPendingJob = useCallback(() => {
+    if (typeof window === "undefined") return;
+    sessionStorage.removeItem(YT_PENDING_JOB_KEY);
+  }, []);
+
+  const readPendingJob = useCallback((): PendingYouTubeJob | null => {
+    if (typeof window === "undefined") return null;
+    const raw = sessionStorage.getItem(YT_PENDING_JOB_KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as PendingYouTubeJob;
+      if (!parsed?.jobId || !parsed?.videoId) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const fetchFinalYouTubeStream = useCallback(
+    async (mergedStreamUrl: string | null | undefined, fallbackStreamUrl: string | null) => {
+      let streamRes: Response;
+      if (mergedStreamUrl) {
+        setLoadingMessage("Downloading high-quality stream...");
+        streamRes = await fetch(mergedStreamUrl, { cache: "no-store" });
+      } else if (fallbackStreamUrl) {
+        setLoadingMessage("HQ merge failed, loading fallback stream...");
+        streamRes = await fetch("/api/youtube", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ streamUrl: fallbackStreamUrl }),
+        });
+      } else {
+        throw new Error("No stream available for this YouTube job");
+      }
+
+      if (!streamRes.ok) {
+        const errorData = await streamRes.json().catch(() => null);
+        throw new Error(errorData?.error || `Failed to stream video (${streamRes.status})`);
+      }
+      return streamRes;
+    },
+    []
+  );
+
+  const completeYouTubeJob = useCallback(
+    async (pending: PendingYouTubeJob) => {
+      let status = "queued";
+      let statusMessage: string | undefined = "Queued for processing...";
+      let queuePosition: number | null | undefined = null;
+      let mergedStreamUrl: string | null | undefined = null;
+
+      while (status !== "ready") {
+        if (Date.now() - pending.startedAt > JOB_POLL_TIMEOUT_MS) {
+          throw new Error("Timed out while preparing high-quality stream");
+        }
+
+        const pollRes = await fetch(
+          `/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}`,
+          { cache: "no-store" }
+        );
+        const pollData = await pollRes.json().catch(() => null);
+        if (!pollRes.ok) {
+          throw new Error(pollData?.error || `Merge job failed (${pollRes.status})`);
+        }
+
+        status = pollData?.status || "failed";
+        statusMessage = pollData?.message;
+        queuePosition = pollData?.queuePosition;
+        mergedStreamUrl = pollData?.streamUrl;
+
+        if (status === "ready" || status === "failed") break;
+
+        if (status === "queued" && queuePosition && queuePosition > 0) {
+          setLoadingMessage(`Queued (#${queuePosition})...`);
+        } else if (statusMessage) {
+          setLoadingMessage(statusMessage);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+      }
+
+      if (status !== "ready") {
+        mergedStreamUrl = pending.fallbackStreamUrl ? null : mergedStreamUrl;
+      }
+
+      const finalStreamUrl =
+        status === "ready"
+          ? mergedStreamUrl ||
+            `/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}&stream=1`
+          : null;
+
+      const streamRes = await fetchFinalYouTubeStream(
+        finalStreamUrl,
+        pending.fallbackStreamUrl
+      );
+
+      const blob = await streamRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      onVideoSelect(blobUrl, pending.title || `youtube-${pending.videoId}`);
+      clearPendingJob();
+    },
+    [clearPendingJob, fetchFinalYouTubeStream, onVideoSelect]
+  );
 
   const handleFile = useCallback(
     (file: File) => {
@@ -96,70 +216,41 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       throw new Error(jobData?.error || `Failed to start merge job (${jobRes.status})`);
     }
 
-    let status = jobData.status as string;
-    let statusMessage = jobData.message as string | undefined;
-    let mergedStreamUrl = jobData.streamUrl as string | null | undefined;
-    let queuePosition = jobData.queuePosition as number | null | undefined;
-    const startedAt = Date.now();
+    const pending: PendingYouTubeJob = {
+      jobId: jobData.jobId,
+      videoId: infoData.videoId,
+      title: infoData.title || `youtube-${infoData.videoId}`,
+      fallbackStreamUrl: infoData.streamUrl || null,
+      sourceUrl: trimmed,
+      startedAt: Date.now(),
+    };
+    savePendingJob(pending);
+    await completeYouTubeJob(pending);
+  }, [completeYouTubeJob, savePendingJob]);
 
-    while (status !== "ready") {
-      if (status === "failed") break;
-      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
-        throw new Error("Timed out while preparing high-quality stream");
-      }
+  useEffect(() => {
+    if (resumeStartedRef.current) return;
+    const pending = readPendingJob();
+    if (!pending) return;
 
-      if (status === "queued" && queuePosition && queuePosition > 0) {
-        setLoadingMessage(`Queued (#${queuePosition})...`);
-      } else if (statusMessage) {
-        setLoadingMessage(statusMessage);
-      }
-      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    resumeStartedRef.current = true;
+    setActiveTab("url");
+    if (pending.sourceUrl) setUrlInput(pending.sourceUrl);
+    setUrlError("");
+    setUrlLoading(true);
+    setLoadingMessage("Resuming previous YouTube processing...");
 
-      const pollRes = await fetch(
-        `/api/youtube/jobs?jobId=${encodeURIComponent(jobData.jobId)}`,
-        { cache: "no-store" }
-      );
-      const pollData = await pollRes.json().catch(() => null);
-      if (!pollRes.ok) {
-        throw new Error(pollData?.error || `Merge job failed (${pollRes.status})`);
-      }
-      status = pollData?.status || "failed";
-      statusMessage = pollData?.message;
-      mergedStreamUrl = pollData?.streamUrl;
-      queuePosition = pollData?.queuePosition;
-    }
-
-    let streamRes: Response;
-    if (status === "ready") {
-      const streamUrl =
-        mergedStreamUrl || `/api/youtube/jobs?jobId=${encodeURIComponent(jobData.jobId)}&stream=1`;
-      setLoadingMessage("Downloading high-quality stream...");
-      streamRes = await fetch(streamUrl, { cache: "no-store" });
-    } else {
-      // Last-resort fallback if merge job failed.
-      if (!infoData.streamUrl) {
-        throw new Error("High-quality merge failed and no fallback stream is available");
-      }
-      setLoadingMessage("HQ merge failed, loading fallback stream...");
-      streamRes = await fetch("/api/youtube", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ streamUrl: infoData.streamUrl }),
+    void completeYouTubeJob(pending)
+      .catch((err) => {
+        clearPendingJob();
+        setUrlError(
+          err instanceof Error ? err.message : "Failed to resume previous YouTube processing"
+        );
+      })
+      .finally(() => {
+        setUrlLoading(false);
       });
-    }
-
-    if (!streamRes.ok) {
-      const errorData = await streamRes.json().catch(() => null);
-      throw new Error(errorData?.error || `Failed to stream video (${streamRes.status})`);
-    }
-
-    // Create a blob URL from the proxied stream
-    const blob = await streamRes.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    const title = infoData.title || `youtube-${infoData.videoId}`;
-
-    onVideoSelect(blobUrl, title);
-  }, [onVideoSelect]);
+  }, [clearPendingJob, completeYouTubeJob, readPendingJob]);
 
   const handleDirectUrl = useCallback(async (trimmed: string) => {
     setLoadingMessage("Loading");
@@ -201,13 +292,14 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
         await handleDirectUrl(trimmed);
       }
     } catch (err) {
+      if (isYouTubeUrl(trimmed)) clearPendingJob();
       setUrlError(
         err instanceof Error ? err.message : "Failed to load video from URL"
       );
     } finally {
       setUrlLoading(false);
     }
-  }, [urlInput, handleYouTubeUrl, handleDirectUrl]);
+  }, [urlInput, handleYouTubeUrl, handleDirectUrl, clearPendingJob]);
 
   const handleUrlKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

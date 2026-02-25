@@ -99,6 +99,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
     let status = jobData.status as string;
     let statusMessage = jobData.message as string | undefined;
     let mergedStreamUrl = jobData.streamUrl as string | null | undefined;
+    let queuePosition = jobData.queuePosition as number | null | undefined;
     const startedAt = Date.now();
 
     while (status !== "ready") {
@@ -107,7 +108,11 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
         throw new Error("Timed out while preparing high-quality stream");
       }
 
-      if (statusMessage) setLoadingMessage(statusMessage);
+      if (status === "queued" && queuePosition && queuePosition > 0) {
+        setLoadingMessage(`Queued (#${queuePosition})...`);
+      } else if (statusMessage) {
+        setLoadingMessage(statusMessage);
+      }
       await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
 
       const pollRes = await fetch(
@@ -121,6 +126,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       status = pollData?.status || "failed";
       statusMessage = pollData?.message;
       mergedStreamUrl = pollData?.streamUrl;
+      queuePosition = pollData?.queuePosition;
     }
 
     let streamRes: Response;

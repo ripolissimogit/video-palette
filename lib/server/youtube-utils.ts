@@ -18,6 +18,10 @@ const YTDLP_URL =
   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
 const YT_CACHE_DIR = "/tmp/youtube-cache";
 const YT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const YT_CACHE_MAX_BYTES = readPositiveInt(
+  process.env.YT_CACHE_MAX_BYTES,
+  2 * 1024 * 1024 * 1024
+);
 
 export interface YouTubeVideoInfo {
   videoId: string;
@@ -33,6 +37,13 @@ function ensureDir(path: string) {
   if (!existsSync(path)) {
     mkdirSync(path, { recursive: true });
   }
+}
+
+function readPositiveInt(input: string | undefined, fallback: number): number {
+  if (!input) return fallback;
+  const n = Number.parseInt(input, 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return n;
 }
 
 export function isValidVideoId(videoId: string): boolean {
@@ -68,6 +79,45 @@ function cleanupOldCachedVideos() {
       }
     } catch {
       // Ignore stale file cleanup errors.
+    }
+  }
+}
+
+interface CacheEntry {
+  path: string;
+  size: number;
+  mtimeMs: number;
+}
+
+function listCacheEntries(): CacheEntry[] {
+  if (!existsSync(YT_CACHE_DIR)) return [];
+  const entries: CacheEntry[] = [];
+  for (const fileName of readdirSync(YT_CACHE_DIR)) {
+    if (!fileName.endsWith(".mp4")) continue;
+    const path = `${YT_CACHE_DIR}/${fileName}`;
+    try {
+      const st = statSync(path);
+      if (st.size <= 0) continue;
+      entries.push({ path, size: st.size, mtimeMs: st.mtimeMs });
+    } catch {
+      // ignore transient file system errors
+    }
+  }
+  return entries;
+}
+
+function enforceCacheSizeLimit(excludePath?: string) {
+  const entries = listCacheEntries().sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+
+  for (const entry of entries) {
+    if (total <= YT_CACHE_MAX_BYTES) break;
+    if (excludePath && entry.path === excludePath) continue;
+    try {
+      unlinkSync(entry.path);
+      total -= entry.size;
+    } catch {
+      // ignore deletion errors and continue with other files
     }
   }
 }
@@ -115,6 +165,7 @@ export async function ensureYtDlp(): Promise<string> {
 export async function ensureMergedVideo(videoId: string): Promise<string> {
   ensureDir(YT_CACHE_DIR);
   cleanupOldCachedVideos();
+  enforceCacheSizeLimit();
 
   const mergedPath = getMergedVideoPath(videoId);
   if (isFreshCacheFile(mergedPath)) {
@@ -148,6 +199,7 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
   }
 
   validateMergedFileWithFfprobe(mergedPath);
+  enforceCacheSizeLimit(mergedPath);
   return mergedPath;
 }
 

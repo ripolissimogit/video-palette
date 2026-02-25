@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import {
   Download,
   Loader2,
@@ -21,11 +21,72 @@ import {
 } from "@/lib/color-extractor";
 
 type AspectRatioOption = "original" | "instagram4x5";
+type ExportFormat = "webm" | "mp4" | "mov";
+
+interface ExportFormatOption {
+  id: ExportFormat;
+  label: string;
+  extension: string;
+  mimeType: string | null;
+  supported: boolean;
+}
 
 interface ExportPanelProps {
   videoSrc: string;
   colorCount: number;
   colors: RGB[];
+}
+
+function getSupportedMimeType(candidates: string[]): string | null {
+  if (typeof MediaRecorder === "undefined") return null;
+  for (const mimeType of candidates) {
+    if (MediaRecorder.isTypeSupported(mimeType)) return mimeType;
+  }
+  return null;
+}
+
+function getFormatOptions(): ExportFormatOption[] {
+  const webmMimeType = getSupportedMimeType([
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ]);
+  const mp4MimeType = getSupportedMimeType([
+    "video/mp4;codecs=h264,aac",
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=avc1",
+    "video/mp4",
+  ]);
+  const movMimeType = getSupportedMimeType([
+    "video/quicktime;codecs=h264,aac",
+    "video/quicktime;codecs=avc1",
+    "video/quicktime",
+  ]);
+
+  return [
+    {
+      id: "webm",
+      label: "WebM",
+      extension: "webm",
+      mimeType: webmMimeType,
+      supported: !!webmMimeType,
+    },
+    {
+      id: "mp4",
+      label: "MP4",
+      extension: "mp4",
+      mimeType: mp4MimeType,
+      supported: !!mp4MimeType,
+    },
+    {
+      id: "mov",
+      label: "MOV",
+      extension: "mov",
+      mimeType: movMimeType,
+      supported: !!movMimeType,
+    },
+  ];
 }
 
 // --- Gaussian temporal smoothing ---
@@ -87,6 +148,7 @@ export function ExportPanel({
   const [open, setOpen] = useState(false);
   const [showHex, setShowHex] = useState(true);
   const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>("original");
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("webm");
   const [state, setState] = useState<
     "idle" | "analyzing" | "recording" | "processing"
   >("idle");
@@ -95,6 +157,19 @@ export function ExportPanel({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const abortRef = useRef(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const formatOptions = useMemo(() => getFormatOptions(), []);
+  const selectedFormatOption = useMemo(
+    () => formatOptions.find((opt) => opt.id === exportFormat),
+    [formatOptions, exportFormat]
+  );
+
+  useEffect(() => {
+    const current = formatOptions.find((opt) => opt.id === exportFormat);
+    if (current?.supported) return;
+
+    const firstSupported = formatOptions.find((opt) => opt.supported);
+    if (firstSupported) setExportFormat(firstSupported.id);
+  }, [formatOptions, exportFormat]);
 
   const handleBlur = useCallback(() => {
     setTimeout(() => {
@@ -105,9 +180,23 @@ export function ExportPanel({
   }, []);
 
   const exportVideo = useCallback(
-    async (hex: boolean, ratio: AspectRatioOption) => {
+    async (hex: boolean, ratio: AspectRatioOption, format: ExportFormat) => {
       abortRef.current = false;
       setOpen(false);
+
+      const requestedFormat =
+        formatOptions.find((opt) => opt.id === format) ?? formatOptions[0];
+      const activeFormat =
+        requestedFormat?.supported
+          ? requestedFormat
+          : formatOptions.find((opt) => opt.supported) ?? requestedFormat;
+      if (!activeFormat || !activeFormat.mimeType) {
+        setState("idle");
+        setProgress(0);
+        setStatusMsg("");
+        return;
+      }
+      const activeMimeType = activeFormat.mimeType;
 
       const video = document.createElement("video");
       video.src = videoSrc;
@@ -288,13 +377,8 @@ export function ExportPanel({
       // Don't connect to audioCtx.destination — no playback during export
       audioDest.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
 
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-        ? "video/webm;codecs=vp9,opus"
-        : MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-          ? "video/webm;codecs=vp9"
-          : "video/webm";
       const recorder = new MediaRecorder(stream, {
-        mimeType,
+        mimeType: activeMimeType,
         videoBitsPerSecond: 5_000_000,
       });
       recorderRef.current = recorder;
@@ -308,12 +392,13 @@ export function ExportPanel({
         audioCtx.close();
         setState("processing");
         setStatusMsg("Saving...");
-        const blob = new Blob(chunks, { type: mimeType });
+        const blobType = recorder.mimeType || activeMimeType;
+        const blob = new Blob(chunks, { type: blobType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
         const ratioSuffix = ratio === "instagram4x5" ? "-4x5" : "";
-        a.download = `video-palette${ratioSuffix}.webm`;
+        a.download = `video-palette${ratioSuffix}.${activeFormat.extension}`;
         a.click();
         URL.revokeObjectURL(url);
         setState("idle");
@@ -385,7 +470,7 @@ export function ExportPanel({
         video.src = "";
       };
     },
-    [videoSrc, colorCount, colors]
+    [videoSrc, colorCount, colors, formatOptions]
   );
 
   const handleCancel = useCallback(() => {
@@ -397,8 +482,8 @@ export function ExportPanel({
   }, []);
 
   const handleExport = useCallback(() => {
-    exportVideo(showHex, aspectRatio);
-  }, [showHex, aspectRatio, exportVideo]);
+    exportVideo(showHex, aspectRatio, exportFormat);
+  }, [showHex, aspectRatio, exportFormat, exportVideo]);
 
   // --- Active state UI ---
   if (state !== "idle") {
@@ -524,12 +609,53 @@ export function ExportPanel({
 
             <div className="h-px bg-border" />
 
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider px-1">
+                Format
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {formatOptions.map((opt) => {
+                  const selected = exportFormat === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => opt.supported && setExportFormat(opt.id)}
+                      disabled={!opt.supported}
+                      className={`flex items-center justify-center gap-1 px-2 py-2 rounded-lg text-xs transition-colors ${
+                        selected
+                          ? "bg-foreground/10 text-foreground"
+                          : opt.supported
+                            ? "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                            : "text-muted-foreground/50 bg-secondary/30 cursor-not-allowed"
+                      }`}
+                      aria-pressed={selected}
+                      aria-disabled={!opt.supported}
+                    >
+                      <FileVideo className="w-3 h-3" />
+                      <span className="font-medium">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedFormatOption && !selectedFormatOption.supported && (
+                <span className="text-[11px] text-muted-foreground px-1">
+                  Selected format is not supported by this browser
+                </span>
+              )}
+              <span className="text-[11px] text-muted-foreground px-1">
+                Disabled options are not supported by your browser
+              </span>
+            </div>
+
+            <div className="h-px bg-border" />
+
             <button
               onClick={handleExport}
+              disabled={!formatOptions.some((opt) => opt.supported)}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-foreground text-background text-sm font-medium transition-all hover:opacity-90"
             >
               <Download className="w-4 h-4" />
-              Export Video
+              Export {selectedFormatOption?.label ?? "Video"}
             </button>
           </div>
         </div>

@@ -69,10 +69,11 @@ export async function GET(request: NextRequest) {
   try {
     const ytdlp = await ensureYtDlp();
 
-    // Use yt-dlp --dump-json to get video info + best format URL
-    // Format selection: best mp4 with video+audio at <=720p, fallback to any
+    // Use yt-dlp --dump-json to get video info + stream URL.
+    // IMPORTANT: export needs a SINGLE progressive stream with both video+audio.
+    // Avoid split DASH selections (bv+ba) because they often return video-only URLs.
     const formatStr =
-      "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/b[height<=720]/b";
+      "b[height<=720][ext=mp4][vcodec!=none][acodec!=none]/b[height<=720][vcodec!=none][acodec!=none]/b[ext=mp4][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]";
 
     const cmd = `"${ytdlp}" -j --no-download -f "${formatStr}" "https://www.youtube.com/watch?v=${videoId}"`;
 
@@ -86,18 +87,28 @@ export async function GET(request: NextRequest) {
 
     const data = JSON.parse(output);
 
-    // yt-dlp puts the final URL in `url` and requested_formats for merged
-    let streamUrl = data.url;
+    // Prefer direct progressive URL when available
+    let streamUrl = typeof data.url === "string" ? data.url : "";
     const title = data.title || `youtube-${videoId}`;
     const duration = data.duration || 0;
     const width = data.width || 0;
     const height = data.height || 0;
+    const acodec = typeof data.acodec === "string" ? data.acodec : "none";
+    const vcodec = typeof data.vcodec === "string" ? data.vcodec : "none";
 
-    // If there are requested_formats (split video+audio), prefer the video URL
-    // The client can't merge, so we need a single URL with both tracks
-    if (!streamUrl && data.requested_formats) {
-      // Find the format that has both video and audio, or just video
-      streamUrl = data.requested_formats[0]?.url;
+    // Fallback: if yt-dlp still returned split formats, try to find a muxed entry.
+    if ((!streamUrl || acodec === "none" || vcodec === "none") && Array.isArray(data.requested_formats)) {
+      const muxed = data.requested_formats.find(
+        (f: { url?: string; acodec?: string; vcodec?: string }) =>
+          typeof f?.url === "string" &&
+          f?.acodec &&
+          f?.acodec !== "none" &&
+          f?.vcodec &&
+          f?.vcodec !== "none"
+      );
+      if (muxed?.url) {
+        streamUrl = muxed.url;
+      }
     }
 
     if (!streamUrl) {
@@ -117,6 +128,7 @@ export async function GET(request: NextRequest) {
       streamUrl,
       width,
       height,
+      hasAudio: acodec !== "none",
     });
   } catch (error) {
     console.error("[youtube] yt-dlp error:", error);

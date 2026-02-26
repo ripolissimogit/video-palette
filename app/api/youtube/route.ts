@@ -9,20 +9,41 @@ import {
 
 export const maxDuration = 300;
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function proxyStreamUrl(streamUrl: string): Promise<NextResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 55_000);
 
-  const res = await fetch(streamUrl, {
-    signal: controller.signal,
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      Referer: "https://www.youtube.com/",
-      Origin: "https://www.youtube.com",
-    },
-  });
-  clearTimeout(timeout);
+  let res: Response;
+  try {
+    res = await fetch(streamUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        Referer: "https://www.youtube.com/",
+        Origin: "https://www.youtube.com",
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return NextResponse.json(
+        { error: "Upstream request timed out" },
+        { status: 504 }
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     return NextResponse.json(
@@ -137,6 +158,9 @@ export async function POST(request: NextRequest) {
 
     if (!streamUrl) {
       return NextResponse.json({ error: "Missing streamUrl for fallback" }, { status: 400 });
+    }
+    if (!isHttpUrl(streamUrl)) {
+      return NextResponse.json({ error: "Invalid streamUrl" }, { status: 400 });
     }
 
     return await proxyStreamUrl(streamUrl);

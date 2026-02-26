@@ -156,14 +156,9 @@ function CropHandles({
   );
 }
 
-// --- Median buffer helpers ---
+// --- EWMA smoothing constant ---
 
-const EXTRACTION_BUF_SIZE = 5;
-
-function medianChannel(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
+const EWMA_ALPHA = 0.15;
 
 // --- VideoPlayer ---
 
@@ -204,8 +199,8 @@ export function VideoPlayer({
   const colorCountRef = useRef(colorCount);
   const userCropRef = useRef<CropBounds>(userCrop);
   const settingsRef = useRef<ExtractionSettings | undefined>(extractionSettings);
-  const prevExtractedRef = useRef<RGB[]>([]);
-  const extractionBufRef = useRef<RGB[][]>([]);
+  const ewmaRef = useRef<RGB[]>([]);
+  const prevSentRef = useRef<RGB[]>([]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -217,8 +212,8 @@ export function VideoPlayer({
 
   useEffect(() => {
     colorCountRef.current = colorCount;
-    prevExtractedRef.current = [];
-    extractionBufRef.current = [];
+    ewmaRef.current = [];
+    prevSentRef.current = [];
   }, [colorCount]);
   useEffect(() => { settingsRef.current = extractionSettings; }, [extractionSettings]);
 
@@ -285,47 +280,44 @@ export function VideoPlayer({
       extractColorsAsync(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current).then((extracted) => {
         if (extracted.length === 0) return;
         const deadband = settingsRef.current?.deadband ?? 55;
-        const deadbandSq = deadband * deadband;
         const sceneCutSq = (deadband * 2) ** 2;
-        const prev = prevExtractedRef.current;
+        const ewma = ewmaRef.current;
 
-        // Scene cut: flush buffer so stale frames don't pollute the median
+        // Scene cut: reset EWMA instantly so transitions are immediate
         const isSceneCut =
-          prev.length !== extracted.length ||
+          ewma.length !== extracted.length ||
           extracted.some((c, i) => {
-            const p = prev[i];
+            const p = ewma[i];
             return !p || (c.r - p.r) ** 2 + (c.g - p.g) ** 2 + (c.b - p.b) ** 2 > sceneCutSq;
           });
-        if (isSceneCut) extractionBufRef.current = [];
 
-        // Push into ring buffer
-        const buf = extractionBufRef.current;
-        buf.push(extracted);
-        if (buf.length > EXTRACTION_BUF_SIZE) buf.shift();
+        // EWMA: continuous smoothing, no step functions
+        const smoothed: RGB[] = isSceneCut
+          ? extracted
+          : extracted.map((c, i) => ({
+              r: Math.round(EWMA_ALPHA * c.r + (1 - EWMA_ALPHA) * ewma[i].r),
+              g: Math.round(EWMA_ALPHA * c.g + (1 - EWMA_ALPHA) * ewma[i].g),
+              b: Math.round(EWMA_ALPHA * c.b + (1 - EWMA_ALPHA) * ewma[i].b),
+            }));
+        ewmaRef.current = smoothed;
 
-        // Per-slot per-channel median absorbs k-means stochastic jitter
-        const smoothed: RGB[] = extracted.map((_, slot) => ({
-          r: medianChannel(buf.map((f) => f[slot]?.r ?? 0)),
-          g: medianChannel(buf.map((f) => f[slot]?.g ?? 0)),
-          b: medianChannel(buf.map((f) => f[slot]?.b ?? 0)),
-        }));
-
-        // Gate on median output, not raw extraction
+        // Tiny gate: only propagate if any channel moved >1 (avoids pointless re-renders)
+        const last = prevSentRef.current;
         const changed =
-          prev.length !== smoothed.length ||
+          last.length !== smoothed.length ||
           smoothed.some((c, i) => {
-            const p = prev[i];
-            return !p || (c.r - p.r) ** 2 + (c.g - p.g) ** 2 + (c.b - p.b) ** 2 > deadbandSq;
+            const p = last[i];
+            return !p || Math.abs(c.r - p.r) > 1 || Math.abs(c.g - p.g) > 1 || Math.abs(c.b - p.b) > 1;
           });
         if (changed) {
-          prevExtractedRef.current = smoothed;
+          prevSentRef.current = smoothed;
           onColorsExtracted(smoothed);
         }
       });
       setCurrentTime(video.currentTime);
-      drawPreview();
     }
 
+    drawPreview();
     rafRef.current = requestAnimationFrame(extractColors);
   }, [colorCount, onColorsExtracted, drawPreview]);
 
@@ -343,8 +335,8 @@ export function VideoPlayer({
     extractColorsFromCanvas(canvas, video, colorCountRef.current, undefined, userCropRef.current, settingsRef.current)
       .then((extracted) => {
         if (extracted.length > 0) {
-          extractionBufRef.current = [];
-          prevExtractedRef.current = extracted;
+          ewmaRef.current = extracted;
+          prevSentRef.current = extracted;
           onColorsExtracted(extracted);
         }
       });
@@ -427,8 +419,8 @@ export function VideoPlayer({
     if (canvas) {
       extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current).then((extracted) => {
         if (extracted.length > 0) {
-          extractionBufRef.current = [];
-          prevExtractedRef.current = extracted;
+          ewmaRef.current = extracted;
+          prevSentRef.current = extracted;
           onColorsExtracted(extracted);
         }
       });
@@ -461,8 +453,8 @@ export function VideoPlayer({
         drawPreview();
         const extracted = await extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current);
         if (extracted.length > 0) {
-          extractionBufRef.current = [];
-          prevExtractedRef.current = extracted;
+          ewmaRef.current = extracted;
+          prevSentRef.current = extracted;
           onColorsExtracted(extracted);
         }
       }, 50);
@@ -508,8 +500,8 @@ export function VideoPlayer({
     if (!video) return;
     setDuration(video.duration);
     setVideoDims({ w: video.videoWidth, h: video.videoHeight });
-    prevExtractedRef.current = [];
-    extractionBufRef.current = [];
+    ewmaRef.current = [];
+    prevSentRef.current = [];
     setTimeout(drawPreview, 100);
   };
 

@@ -211,7 +211,7 @@ function boostChroma(color: RGB, factor: number): RGB {
 // --- Worker message handler ---
 
 self.onmessage = (e: MessageEvent) => {
-  const { imageData, width, height, k, sampleSize } = e.data;
+  const { imageData, k, sampleSize } = e.data;
   const data = new Uint8ClampedArray(imageData);
   const totalPixels = data.length / 4;
   const step = Math.max(1, Math.floor(totalPixels / sampleSize));

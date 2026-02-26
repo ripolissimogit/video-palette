@@ -258,6 +258,7 @@ export function VideoPaletteApp() {
   const [userCrop, setUserCrop] = useState<CropBounds>(DEFAULT_CROP);
   const [extractionSettings, setExtractionSettings] = useState<ExtractionSettings>(DEFAULT_EXTRACTION_SETTINGS);
   const latestColorsRef = useRef<RGB[]>(DEFAULT_COLORS);
+  const latestVideoSrcRef = useRef<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
@@ -287,7 +288,12 @@ export function VideoPaletteApp() {
   }, []);
 
   const handleVideoSelect = useCallback((url: string, name: string) => {
-    setVideoSrc(url);
+    setVideoSrc((previousUrl) => {
+      if (previousUrl && previousUrl.startsWith("blob:") && previousUrl !== url) {
+        URL.revokeObjectURL(previousUrl);
+      }
+      return url;
+    });
     setVideoName(name);
     setUserCrop(DEFAULT_CROP);
   }, []);
@@ -320,6 +326,19 @@ export function VideoPaletteApp() {
 
   const handleColorCountChange = useCallback((count: number) => {
     setColorCount(count);
+  }, []);
+
+  useEffect(() => {
+    latestVideoSrcRef.current = videoSrc;
+  }, [videoSrc]);
+
+  useEffect(() => {
+    return () => {
+      const currentUrl = latestVideoSrcRef.current;
+      if (currentUrl && currentUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(currentUrl);
+      }
+    };
   }, []);
 
   return (

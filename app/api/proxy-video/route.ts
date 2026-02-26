@@ -7,11 +7,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Missing url parameter" }, { status: 400 });
   }
 
+  let parsedUrl: URL;
   try {
-    new URL(url);
+    parsedUrl = new URL(url);
   } catch {
     return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
   }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return NextResponse.json(
+      { error: "Only http/https URLs are allowed" },
+      { status: 400 }
+    );
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 55_000);
 
   try {
     const range = request.headers.get("range");
@@ -22,7 +33,10 @@ export async function GET(request: NextRequest) {
       headers["Range"] = range;
     }
 
-    const upstream = await fetch(url, { headers });
+    const upstream = await fetch(parsedUrl.toString(), {
+      headers,
+      signal: controller.signal,
+    });
 
     if (!upstream.ok && upstream.status !== 206) {
       return NextResponse.json(
@@ -71,9 +85,17 @@ export async function GET(request: NextRequest) {
       headers: responseHeaders,
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return NextResponse.json(
+        { error: "Upstream request timed out" },
+        { status: 504 }
+      );
+    }
     return NextResponse.json(
       { error: "Failed to fetch video" },
       { status: 500 }
     );
+  } finally {
+    clearTimeout(timeout);
   }
 }

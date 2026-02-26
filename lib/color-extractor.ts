@@ -315,7 +315,7 @@ export async function extractColorsFromCanvas(
     const validG: Uint8Array   = new Uint8Array(totalPx);
     const validB: Uint8Array   = new Uint8Array(totalPx);
     const validW: Float32Array = new Float32Array(totalPx);
-    let nValid = 0, weightSum = 0;
+    let nValid = 0;
 
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -343,7 +343,6 @@ export async function extractColorsFromCanvas(
         validR[nValid] = r; validG[nValid] = g; validB[nValid] = b;
         validW[nValid] = w;
         nValid++;
-        weightSum += w;
       }
     }
 

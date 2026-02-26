@@ -349,8 +349,8 @@ export function matchColorOrder(prevColors: RGB[], newColors: RGB[]): RGB[] {
 // --- Smooth interpolation ---
 const MAX_CHANNEL_DELTA = 35;
 // Changes below this RGB distance are considered compression noise and suppressed.
-// sqrt(225) = 15 units — below the perceptual threshold for palette swatches.
-const DEADBAND_SQ = 225;
+// sqrt(625) = 25 units — covers frame-to-frame MMCQ bucket instability on static scenes.
+const DEADBAND_SQ = 625;
 
 function clampDelta(from: number, to: number, t: number): number {
   const raw = Math.round(from + (to - from) * t);

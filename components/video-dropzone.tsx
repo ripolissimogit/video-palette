@@ -3,8 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Upload, Film, Link, Loader2, AlertCircle } from "lucide-react";
 
+export type VideoSourceKind =
+  | "local-file"
+  | "direct-url"
+  | "youtube-merged"
+  | "youtube-fallback";
+
+export interface VideoSelectionMeta {
+  sourceKind: VideoSourceKind;
+}
+
 interface VideoDropzoneProps {
-  onVideoSelect: (url: string, name: string) => void;
+  onVideoSelect: (url: string, name: string, meta?: VideoSelectionMeta) => void;
 }
 
 type Tab = "file" | "url";
@@ -68,9 +78,11 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
   const fetchFinalYouTubeStream = useCallback(
     async (mergedStreamUrl: string | null | undefined, fallbackStreamUrl: string | null) => {
       let streamRes: Response;
+      let sourceKind: VideoSourceKind;
       if (mergedStreamUrl) {
         setLoadingMessage("Downloading high-quality stream...");
         streamRes = await fetch(mergedStreamUrl, { cache: "no-store" });
+        sourceKind = "youtube-merged";
       } else if (fallbackStreamUrl) {
         setLoadingMessage("HQ merge failed, loading fallback stream...");
         streamRes = await fetch("/api/youtube", {
@@ -78,6 +90,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ streamUrl: fallbackStreamUrl }),
         });
+        sourceKind = "youtube-fallback";
       } else {
         throw new Error("No stream available for this YouTube job");
       }
@@ -86,7 +99,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
         const errorData = await streamRes.json().catch(() => null);
         throw new Error(errorData?.error || `Failed to stream video (${streamRes.status})`);
       }
-      return streamRes;
+      return { streamRes, sourceKind };
     },
     []
   );
@@ -138,14 +151,18 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
             `/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}&stream=1`
           : null;
 
-      const streamRes = await fetchFinalYouTubeStream(
+      const { streamRes, sourceKind } = await fetchFinalYouTubeStream(
         finalStreamUrl,
         pending.fallbackStreamUrl
       );
 
       const blob = await streamRes.blob();
       const blobUrl = URL.createObjectURL(blob);
-      onVideoSelect(blobUrl, pending.title || `youtube-${pending.videoId}`);
+      onVideoSelect(
+        blobUrl,
+        pending.title || `youtube-${pending.videoId}`,
+        { sourceKind }
+      );
       clearPendingJob();
     },
     [clearPendingJob, fetchFinalYouTubeStream, onVideoSelect]
@@ -155,7 +172,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
     (file: File) => {
       if (file.type.startsWith("video/")) {
         const url = URL.createObjectURL(file);
-        onVideoSelect(url, file.name);
+        onVideoSelect(url, file.name, { sourceKind: "local-file" });
       }
     },
     [onVideoSelect]
@@ -268,7 +285,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
     const pathParts = urlObj.pathname.split("/").filter(Boolean);
     const fileName = pathParts[pathParts.length - 1] || "remote-video";
 
-    onVideoSelect(proxyUrl, decodeURIComponent(fileName));
+    onVideoSelect(proxyUrl, decodeURIComponent(fileName), { sourceKind: "direct-url" });
   }, [onVideoSelect]);
 
   const handleUrlSubmit = useCallback(async () => {

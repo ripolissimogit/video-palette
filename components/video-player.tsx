@@ -19,6 +19,7 @@ import {
   extractColorsFromCanvas,
   extractColorsAsync,
 } from "@/lib/color-extractor";
+import type { VideoSourceKind } from "./video-dropzone";
 
 // --- Crop handles ---
 // Handles are always at the canvas edges. Dragging inward crops more, outward uncrop.
@@ -198,6 +199,7 @@ const EWMA_ALPHA = 0.15;
 interface VideoPlayerProps {
   src: string;
   fileName: string;
+  sourceKind?: VideoSourceKind | null;
   colorCount: number;
   colors: RGB[];
   userCrop: CropBounds;
@@ -212,6 +214,7 @@ interface VideoPlayerProps {
 export function VideoPlayer({
   src,
   fileName,
+  sourceKind = null,
   colorCount,
   colors,
   userCrop,
@@ -588,6 +591,22 @@ export function VideoPlayer({
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  const sourceLabel =
+    sourceKind === "youtube-merged"
+      ? "YouTube HQ merge"
+      : sourceKind === "youtube-fallback"
+        ? "YouTube fallback"
+        : sourceKind === "direct-url"
+          ? "Direct URL"
+          : sourceKind === "local-file"
+            ? "Local file"
+            : null;
+
+  const resolutionLabel =
+    videoDims.w > 0 && videoDims.h > 0
+      ? `${videoDims.w}x${videoDims.h}`
+      : null;
+
   // Canvas dimensions: cropped region + palette bar (matches export exactly)
   const cropLeftPx  = Math.round(userCrop.left   * videoDims.w);
   const cropRightPx = Math.round(userCrop.right  * videoDims.w);
@@ -775,12 +794,24 @@ export function VideoPlayer({
             <span className="text-xs font-mono text-muted-foreground ml-2">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
+            {resolutionLabel && (
+              <span className="text-xs font-mono text-muted-foreground/90">
+                {resolutionLabel}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground truncate max-w-[150px] hidden sm:inline">
-              {fileName}
-            </span>
+            <div className="hidden sm:flex flex-col items-end">
+              <span className="text-xs text-muted-foreground truncate max-w-[220px]">
+                {fileName}
+              </span>
+              {(resolutionLabel || sourceLabel) && (
+                <span className="text-[11px] text-muted-foreground/90">
+                  {[resolutionLabel, sourceLabel].filter(Boolean).join(" • ")}
+                </span>
+              )}
+            </div>
             <button
               onClick={toggleFullscreen}
               className="w-9 h-9 rounded-lg bg-secondary hover:bg-secondary/80 flex items-center justify-center text-foreground transition-colors"

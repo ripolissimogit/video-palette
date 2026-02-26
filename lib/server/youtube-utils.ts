@@ -51,6 +51,44 @@ function readPositiveInt(input: string | undefined, fallback: number): number {
   return n;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function readTrimmedEnv(name: string): string | null {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : null;
+}
+
+function buildYtDlpOptionalArgs(): string[] {
+  const args: string[] = [];
+
+  const cookiesFile = readTrimmedEnv("YTDLP_COOKIES_FILE");
+  if (cookiesFile) {
+    if (existsSync(cookiesFile)) {
+      args.push("--cookies", cookiesFile);
+    } else {
+      console.warn(`[youtube] YTDLP_COOKIES_FILE not found: ${cookiesFile}`);
+    }
+  }
+
+  const cookiesFromBrowser = readTrimmedEnv("YTDLP_COOKIES_FROM_BROWSER");
+  if (cookiesFromBrowser) {
+    args.push("--cookies-from-browser", cookiesFromBrowser);
+  }
+
+  const extractorArgs = readTrimmedEnv("YTDLP_EXTRACTOR_ARGS");
+  if (extractorArgs) {
+    args.push("--extractor-args", extractorArgs);
+  }
+
+  return args;
+}
+
+function buildYtDlpCommand(binary: string, args: string[]): string {
+  return [shellQuote(binary), ...args.map(shellQuote)].join(" ");
+}
+
 export function isValidVideoId(videoId: string): boolean {
   return /^[a-zA-Z0-9_-]{11}$/.test(videoId);
 }
@@ -217,13 +255,24 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
   }
 
   const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const formatStr =
-    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
-  const cmd =
-    `"${ytdlp}" --no-playlist --no-progress --no-warnings ` +
-    `--ffmpeg-location "${FFMPEG_PATH}" ` +
-    `-f "${formatStr}" --merge-output-format mp4 ` +
-    `--output "${mergedPath}" "${sourceUrl}"`;
+  // Do not force mp4-only sources here: many YouTube 2160p streams are vp9/webm.
+  // yt-dlp + ffmpeg will still output a merged mp4 when possible.
+  const formatStr = "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best";
+  const cmd = buildYtDlpCommand(ytdlp, [
+    "--no-playlist",
+    "--no-progress",
+    "--no-warnings",
+    ...buildYtDlpOptionalArgs(),
+    "--ffmpeg-location",
+    FFMPEG_PATH,
+    "-f",
+    formatStr,
+    "--merge-output-format",
+    "mp4",
+    "--output",
+    mergedPath,
+    sourceUrl,
+  ]);
 
   console.log("[youtube] Downloading and merging with ffmpeg:", videoId);
   execSync(cmd, {
@@ -278,7 +327,14 @@ export async function getYouTubeVideoInfo(
   const formatStr =
     "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/b[ext=mp4][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]";
 
-  const cmd = `"${ytdlp}" -j --no-download -f "${formatStr}" "https://www.youtube.com/watch?v=${videoId}"`;
+  const cmd = buildYtDlpCommand(ytdlp, [
+    "-j",
+    "--no-download",
+    ...buildYtDlpOptionalArgs(),
+    "-f",
+    formatStr,
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ]);
 
   console.log("[youtube] Running yt-dlp for video:", videoId);
 

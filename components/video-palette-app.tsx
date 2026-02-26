@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { type RGB, type CropBounds, type ExtractionSettings, DEFAULT_EXTRACTION_SETTINGS, lerpColors, matchColorOrder } from "@/lib/color-extractor";
-import { VideoDropzone } from "./video-dropzone";
+import { VideoDropzone, type VideoSelectionMeta, type VideoSourceKind } from "./video-dropzone";
 import { VideoPlayer } from "./video-player";
 import { PaletteBar } from "./palette-bar";
 import { ColorCountSelector } from "./color-count-selector";
@@ -75,6 +75,7 @@ const PRESETS: { id: string; label: string; settings: ExtractionSettings }[] = [
       minColorDist: 35,
       saturationWeight: 0.25,
       contrastWeight: 0.1,
+      boostDominantColors: true,
     },
   },
   {
@@ -87,6 +88,7 @@ const PRESETS: { id: string; label: string; settings: ExtractionSettings }[] = [
       minColorDist: 15,
       saturationWeight: 2.0,
       contrastWeight: 0.75,
+      boostDominantColors: false,
     },
   },
 ];
@@ -98,7 +100,8 @@ function matchesPreset(a: ExtractionSettings, b: ExtractionSettings): boolean {
     a.minClusterSize  === b.minClusterSize &&
     a.minColorDist    === b.minColorDist &&
     a.saturationWeight === b.saturationWeight &&
-    a.contrastWeight  === b.contrastWeight
+    a.contrastWeight  === b.contrastWeight &&
+    a.boostDominantColors === b.boostDominantColors
   );
 }
 
@@ -118,8 +121,16 @@ function ExtractionControls({
     settings.minClusterSize === DEFAULT_EXTRACTION_SETTINGS.minClusterSize &&
     settings.minColorDist === DEFAULT_EXTRACTION_SETTINGS.minColorDist &&
     settings.saturationWeight === DEFAULT_EXTRACTION_SETTINGS.saturationWeight &&
-    settings.contrastWeight === DEFAULT_EXTRACTION_SETTINGS.contrastWeight;
-  const update = (key: keyof ExtractionSettings, value: number) =>
+    settings.contrastWeight === DEFAULT_EXTRACTION_SETTINGS.contrastWeight &&
+    settings.boostDominantColors === DEFAULT_EXTRACTION_SETTINGS.boostDominantColors;
+  type NumericSettingKey =
+    | "deadband"
+    | "blendFactor"
+    | "minClusterSize"
+    | "minColorDist"
+    | "saturationWeight"
+    | "contrastWeight";
+  const update = (key: NumericSettingKey, value: number) =>
     onChange({ ...settings, [key]: value });
 
   const sliders = (
@@ -172,6 +183,31 @@ function ExtractionControls({
         displayValue={settings.contrastWeight.toFixed(2)}
         onChange={(v) => update("contrastWeight", v)}
       />
+      <button
+        onClick={() =>
+          onChange({ ...settings, boostDominantColors: !settings.boostDominantColors })
+        }
+        className="flex items-center justify-between rounded-lg border border-border bg-secondary/50 px-3 py-2 text-left transition-colors hover:bg-secondary"
+        aria-pressed={settings.boostDominantColors}
+      >
+        <div className="flex flex-col">
+          <span className="text-sm text-foreground">Boost dominante</span>
+          <span className="text-xs text-muted-foreground">
+            Favorisce i colori che occupano aree grandi e riduce gli accenti minori.
+          </span>
+        </div>
+        <div
+          className={`h-5 w-9 rounded-full transition-colors ${
+            settings.boostDominantColors ? "bg-foreground" : "bg-muted-foreground/30"
+          }`}
+        >
+          <div
+            className={`mt-[3px] h-3.5 w-3.5 rounded-full bg-background transition-transform ${
+              settings.boostDominantColors ? "translate-x-[18px]" : "translate-x-[3px]"
+            }`}
+          />
+        </div>
+      </button>
       {!isDefault && !sidebar && (
         <button
           onClick={() => onChange(DEFAULT_EXTRACTION_SETTINGS)}
@@ -253,6 +289,7 @@ const DEFAULT_CROP: CropBounds = { top: 0, bottom: 0, left: 0, right: 0 };
 export function VideoPaletteApp() {
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoName, setVideoName] = useState("");
+  const [videoSourceKind, setVideoSourceKind] = useState<VideoSourceKind | null>(null);
   const [colors, setColors] = useState<RGB[]>(DEFAULT_COLORS);
   const [colorCount, setColorCount] = useState(5);
   const [userCrop, setUserCrop] = useState<CropBounds>(DEFAULT_CROP);
@@ -287,7 +324,7 @@ export function VideoPaletteApp() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const handleVideoSelect = useCallback((url: string, name: string) => {
+  const handleVideoSelect = useCallback((url: string, name: string, meta?: VideoSelectionMeta) => {
     setVideoSrc((previousUrl) => {
       if (previousUrl && previousUrl.startsWith("blob:") && previousUrl !== url) {
         URL.revokeObjectURL(previousUrl);
@@ -295,6 +332,7 @@ export function VideoPaletteApp() {
       return url;
     });
     setVideoName(name);
+    setVideoSourceKind(meta?.sourceKind ?? null);
     setUserCrop(DEFAULT_CROP);
   }, []);
 
@@ -319,6 +357,7 @@ export function VideoPaletteApp() {
     if (videoSrc && videoSrc.startsWith("blob:")) URL.revokeObjectURL(videoSrc);
     setVideoSrc(null);
     setVideoName("");
+    setVideoSourceKind(null);
     setColors(DEFAULT_COLORS);
     latestColorsRef.current = DEFAULT_COLORS;
     setUserCrop(DEFAULT_CROP);
@@ -436,6 +475,7 @@ export function VideoPaletteApp() {
                     onRemove={handleRemove}
                     fullscreenContainerRef={fullscreenContainerRef}
                     isExternalFullscreen={isFullscreen}
+                    sourceKind={videoSourceKind}
                   />
                 </div>
               </div>

@@ -177,6 +177,8 @@ export interface ExtractionSettings {
   saturationWeight: number;
   /** Local contrast weight (0–3). Boosts sampling probability for pixels at high-contrast edges. */
   contrastWeight: number;
+  /** When enabled, favors colors that occupy larger areas and suppresses tiny accents/noise. */
+  boostDominantColors: boolean;
 }
 
 export const DEFAULT_EXTRACTION_SETTINGS: ExtractionSettings = {
@@ -186,6 +188,7 @@ export const DEFAULT_EXTRACTION_SETTINGS: ExtractionSettings = {
   minColorDist: 25,
   saturationWeight: 0.5,
   contrastWeight: 0.3,
+  boostDominantColors: false,
 };
 
 // --- k-means clustering in CIE LAB color space ---
@@ -301,6 +304,8 @@ export async function extractColorsFromCanvas(
     const totalPx = W * H;
     const satW = settings?.saturationWeight ?? DEFAULT_EXTRACTION_SETTINGS.saturationWeight;
     const contW = settings?.contrastWeight  ?? DEFAULT_EXTRACTION_SETTINGS.contrastWeight;
+    const boostDominantColors =
+      settings?.boostDominantColors ?? DEFAULT_EXTRACTION_SETTINGS.boostDominantColors;
 
     // Pass 1: luminance map for local-contrast computation
     const lumMap = new Float32Array(totalPx);
@@ -375,7 +380,8 @@ export async function extractColorsFromCanvas(
       let cumSum = 0;
       for (let i = 0; i < nValid; i++) { cumSum += validW[i]; cdf[i] = cumSum; }
       // Mix weighted + uniform sampling so large flat regions are still represented.
-      const weightedSamples = Math.max(1, Math.round(nSamples * 0.65));
+      const weightedRatio = boostDominantColors ? 0.5 : 0.65;
+      const weightedSamples = Math.max(1, Math.round(nSamples * weightedRatio));
       for (let s = 0; s < weightedSamples; s++) {
         const target = Math.random() * cumSum;
         let lo = 0, hi = nValid - 1;
@@ -399,6 +405,9 @@ export async function extractColorsFromCanvas(
 
     // Prominent pool: clusters covering ≥ accentMinPop of sampled pixels
     const minPopFrac = settings?.minClusterSize ?? DEFAULT_EXTRACTION_SETTINGS.minClusterSize;
+    const effectiveMinPopFrac = boostDominantColors
+      ? Math.min(0.25, Math.max(minPopFrac * 1.8, minPopFrac + 0.01))
+      : minPopFrac;
     type Candidate = {
       r: number;
       g: number;
@@ -413,7 +422,7 @@ export async function extractColorsFromCanvas(
       lab: c.centroid,
     }));
     const candidates = totalPop > 0
-      ? allCandidates.filter((c) => c.pop / totalPop >= minPopFrac)
+      ? allCandidates.filter((c) => c.pop / totalPop >= effectiveMinPopFrac)
       : allCandidates;
 
     // Dominant area anchor from histogram (area-based, not contrast/saturation-weighted).
@@ -443,7 +452,10 @@ export async function extractColorsFromCanvas(
     const totalPopSafe = Math.max(1, totalPop);
     const EXTREME_DARK_LUMA = 24;
     const EXTREME_LIGHT_LUMA = 245;
-    const minExtremePopFrac = Math.max(minPopFrac * 1.5, 0.05);
+    const minExtremePopFrac = Math.max(
+      effectiveMinPopFrac * 1.5,
+      boostDominantColors ? 0.08 : 0.05
+    );
     let selectedExtremeDark = 0;
     let selectedExtremeLight = 0;
 
@@ -461,6 +473,13 @@ export async function extractColorsFromCanvas(
       const popFrac = c.pop / totalPopSafe;
       const isExtremeDark = luma <= EXTREME_DARK_LUMA;
       const isExtremeLight = luma >= EXTREME_LIGHT_LUMA;
+
+      if (
+        boostDominantColors &&
+        popFrac < Math.max(effectiveMinPopFrac * 0.55, 0.012)
+      ) {
+        return false;
+      }
 
       // Keep extreme tones only when they are truly present as a significant area.
       if ((isExtremeDark || isExtremeLight) && popFrac < minExtremePopFrac) {

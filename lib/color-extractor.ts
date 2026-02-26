@@ -1,8 +1,6 @@
-// Color extraction using node-vibrant for accent-aware palette generation.
-// Vibrant uses MMCQ quantization + intelligent swatch selection that preserves
-// both dominant and accent colors — solving the accent-loss problem of plain Median Cut.
-
-import { Vibrant } from "node-vibrant/browser";
+// Color extraction using k-means clustering in CIE LAB color space.
+// LAB k-means finds cluster centroids that correspond to colors actually present
+// in the frame — more accurate than MMCQ which returns box-midpoint approximations.
 
 export interface RGB {
   r: number;
@@ -164,7 +162,125 @@ function drawVideoToCanvas(
   return ctx;
 }
 
-// --- Swatch priority: accent colors first, then muted tones ---
+// --- Extraction settings ---
+
+export interface ExtractionSettings {
+  /** Deadband in RGB units (0–80). Changes smaller than this are suppressed at the extraction gate. */
+  deadband: number;
+  /** Blend factor (0.05–1.0). How fast colors update per frame. */
+  blendFactor: number;
+  /** Minimum fraction of frame pixels a cluster must cover to enter the selection pool (0–0.10). */
+  minClusterSize: number;
+  /** Minimum LAB ΔE distance between selected colors (10–60). */
+  minColorDist: number;
+  /** Saturation weight (0–3). Boosts sampling probability for highly-saturated pixels. */
+  saturationWeight: number;
+  /** Local contrast weight (0–3). Boosts sampling probability for pixels at high-contrast edges. */
+  contrastWeight: number;
+}
+
+export const DEFAULT_EXTRACTION_SETTINGS: ExtractionSettings = {
+  deadband: 55,
+  blendFactor: 0.10,
+  minClusterSize: 0.02,
+  minColorDist: 25,
+  saturationWeight: 0.5,
+  contrastWeight: 0.3,
+};
+
+// --- k-means clustering in CIE LAB color space ---
+
+const MAX_SAMPLES = 3000;
+const KMEANS_ITERS = 14;
+
+function linearize(c: number): number {
+  const n = c / 255;
+  return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+}
+
+function rgbToLab(r: number, g: number, b: number): [number, number, number] {
+  const lr = linearize(r), lg = linearize(g), lb = linearize(b);
+  const x = lr * 0.4124564 + lg * 0.3575761 + lb * 0.1804375;
+  const y = lr * 0.2126729 + lg * 0.7151522 + lb * 0.0721750;
+  const z = lr * 0.0193339 + lg * 0.1191920 + lb * 0.9503041;
+  const f = (t: number) => t > 0.008856 ? t ** (1 / 3) : 7.787 * t + 16 / 116;
+  const fy = f(y);
+  return [116 * fy - 16, 500 * (f(x / 0.95047) - fy), 200 * (fy - f(z / 1.08883))];
+}
+
+function labToRgb(L: number, a: number, b: number): RGB {
+  const fy = (L + 16) / 116;
+  const cube = (t: number) => { const v = t ** 3; return v > 0.008856 ? v : (t - 16 / 116) / 7.787; };
+  const x = cube(a / 500 + fy) * 0.95047;
+  const y = cube(fy);
+  const z = cube(fy - b / 200) * 1.08883;
+  const lr =  x * 3.2404542 - y * 1.5371385 - z * 0.4985314;
+  const lg = -x * 0.9692660 + y * 1.8760108 + z * 0.0415560;
+  const lb =  x * 0.0556434 - y * 0.2040259 + z * 1.0572252;
+  const toSrgb = (c: number) => Math.round(Math.max(0, Math.min(1, c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055)) * 255);
+  return { r: toSrgb(lr), g: toSrgb(lg), b: toSrgb(lb) };
+}
+
+function labDistSq(a: [number, number, number], b: [number, number, number]): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
+
+interface KCluster { centroid: [number, number, number]; pop: number; rgb: RGB; }
+
+function kmeansLab(labs: Array<[number, number, number]>, k: number): KCluster[] {
+  const n = labs.length;
+  k = Math.min(k, n);
+  if (k === 0) return [];
+
+  // k-means++ initialization
+  const seedIdx: number[] = [Math.floor(Math.random() * n)];
+  while (seedIdx.length < k) {
+    const dists = labs.map((p) => {
+      let min = Infinity;
+      for (const si of seedIdx) min = Math.min(min, labDistSq(p, labs[si]));
+      return min;
+    });
+    const total = dists.reduce((s, d) => s + d, 0);
+    let r = Math.random() * total;
+    let chosen = n - 1;
+    for (let i = 0; i < n; i++) {
+      r -= dists[i];
+      if (r <= 0) { chosen = i; break; }
+    }
+    seedIdx.push(chosen);
+  }
+
+  let centroids = seedIdx.map((i) => [...labs[i]] as [number, number, number]);
+  const assign = new Int32Array(n);
+
+  for (let iter = 0; iter < KMEANS_ITERS; iter++) {
+    // Assign each point to nearest centroid
+    for (let i = 0; i < n; i++) {
+      let best = 0, bestD = Infinity;
+      for (let j = 0; j < k; j++) {
+        const d = labDistSq(labs[i], centroids[j]);
+        if (d < bestD) { bestD = d; best = j; }
+      }
+      assign[i] = best;
+    }
+    // Update centroids
+    const sums = Array.from({ length: k }, () => [0, 0, 0, 0] as [number, number, number, number]);
+    for (let i = 0; i < n; i++) {
+      const s = sums[assign[i]];
+      s[0] += labs[i][0]; s[1] += labs[i][1]; s[2] += labs[i][2]; s[3]++;
+    }
+    centroids = sums.map((s, j) =>
+      s[3] > 0 ? [s[0] / s[3], s[1] / s[3], s[2] / s[3]] : centroids[j]
+    );
+  }
+
+  const pops = new Int32Array(k);
+  for (let i = 0; i < n; i++) pops[assign[i]]++;
+
+  return centroids
+    .map((c, j) => ({ centroid: c, pop: pops[j], rgb: labToRgb(c[0], c[1], c[2]) }))
+    .sort((a, b) => b.pop - a.pop);
+}
 
 // --- Public API ---
 
@@ -174,108 +290,147 @@ export async function extractColorsFromCanvas(
   k: number = 5,
   _sampleSize?: number,
   explicitCrop?: CropBounds,
+  settings?: ExtractionSettings,
 ): Promise<RGB[]> {
   const ctx = drawVideoToCanvas(canvas, video, explicitCrop);
   if (!ctx) return [];
 
   try {
-    const dataUrl = canvas.toDataURL();
-    const v = Vibrant.from(dataUrl)
-      .maxColorCount(64)
-      .quality(1)
-      .build();
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const W = canvas.width, H = canvas.height;
+    const totalPx = W * H;
+    const satW = settings?.saturationWeight ?? DEFAULT_EXTRACTION_SETTINGS.saturationWeight;
+    const contW = settings?.contrastWeight  ?? DEFAULT_EXTRACTION_SETTINGS.contrastWeight;
 
-    const palette = await v.getPalette();
-    const allQuantized = v.result?.colors ?? [];
-
-    // Build candidate pool: all quantized colors sorted by population,
-    // excluding near-black/near-white (letterboxing, overexposed areas)
-    const candidates = [...allQuantized]
-      .sort((a, b) => b.population - a.population)
-      .map((s) => ({
-        r: Math.round(s.rgb[0]),
-        g: Math.round(s.rgb[1]),
-        b: Math.round(s.rgb[2]),
-        pop: s.population,
-      }))
-      .filter((c) => {
-        const lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
-        return lum > 10 && lum < 245;
-      });
-
-    // Also collect named Vibrant swatch (the accent) to guarantee inclusion
-    const vibrantSwatch = palette.Vibrant;
-    let accent: RGB | null = null;
-    let accentPop = 0;
-    if (vibrantSwatch) {
-      accent = {
-        r: Math.round(vibrantSwatch.rgb[0]),
-        g: Math.round(vibrantSwatch.rgb[1]),
-        b: Math.round(vibrantSwatch.rgb[2]),
-      };
-      accentPop = vibrantSwatch.population;
+    // Pass 1: luminance map for local-contrast computation
+    const lumMap = new Float32Array(totalPx);
+    for (let i = 0; i < totalPx; i++) {
+      const o = i * 4;
+      lumMap[i] = (0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]) / 255;
     }
 
-    const totalPop = allQuantized.reduce((sum: number, s: { population: number }) => sum + s.population, 0);
+    // Pass 2: collect valid pixels with perceptual weights
+    // weight = 1 + satW * saturation + contW * localContrast * 4
+    const validR: Uint8Array   = new Uint8Array(totalPx);
+    const validG: Uint8Array   = new Uint8Array(totalPx);
+    const validB: Uint8Array   = new Uint8Array(totalPx);
+    const validW: Float32Array = new Float32Array(totalPx);
+    let nValid = 0, weightSum = 0;
 
-    // Greedy selection: pick colors by population, enforcing minimum perceptual distance
-    const MIN_DIST_SQ = 2500; // ~50 RGB units apart
-    const colors: RGB[] = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const o = i * 4;
+        const r = data[o], g = data[o + 1], b = data[o + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (lum <= 10 || lum >= 245) continue;
+        if (lum < 30 && rgbSaturation({ r, g, b }) < 0.12) continue;
 
-    // Always start with the most populous color (the dominant tone)
-    if (candidates.length > 0) {
-      const top = candidates[0];
-      colors.push({ r: top.r, g: top.g, b: top.b });
-    }
+        const lumN = lumMap[i];
+        const rl = r / 255, gl = g / 255, bl = b / 255;
+        const max = Math.max(rl, gl, bl), min = Math.min(rl, gl, bl);
+        const denom = 1 - Math.abs(2 * lumN - 1);
+        const sat = denom < 0.001 ? 0 : (max - min) / denom;
 
-    // Guarantee the Vibrant accent a slot only when it:
-    //   1. Is perceptually far from the dominant color (>50 RGB units)
-    //   2. Has meaningful saturation (>8%) — guards against B&W artifact colors
-    //   3. Represents at least 2% of frame pixels — guards against micro-details
-    //      (e.g. solar panel glint, tiny logo) being promoted over dominant tones
-    const MIN_ACCENT_SAT = 0.08;
-    const MIN_ACCENT_POP_FRAC = 0.02;
-    if (accent && colors.length > 0) {
-      const dist = rgbDistanceSq(accent, colors[0]);
-      const popFrac = totalPop > 0 ? accentPop / totalPop : 0;
-      if (dist >= MIN_DIST_SQ && rgbSaturation(accent) >= MIN_ACCENT_SAT && popFrac >= MIN_ACCENT_POP_FRAC) {
-        colors.push(accent);
+        let neighborSum = 0, nNeighbors = 0;
+        if (x > 0)     { neighborSum += lumMap[i - 1]; nNeighbors++; }
+        if (x < W - 1) { neighborSum += lumMap[i + 1]; nNeighbors++; }
+        if (y > 0)     { neighborSum += lumMap[i - W]; nNeighbors++; }
+        if (y < H - 1) { neighborSum += lumMap[i + W]; nNeighbors++; }
+        const localContrast = nNeighbors > 0 ? Math.abs(lumN - neighborSum / nNeighbors) : 0;
+
+        const w = 1.0 + satW * sat + contW * localContrast * 4;
+        validR[nValid] = r; validG[nValid] = g; validB[nValid] = b;
+        validW[nValid] = w;
+        nValid++;
+        weightSum += w;
       }
     }
 
-    // Fill remaining slots from candidates, ensuring diversity
+    if (nValid === 0) return Array(k).fill({ r: 128, g: 128, b: 128 });
+
+    // Pass 3: sample pixels — weighted CDF or uniform step
+    const nSamples = Math.min(MAX_SAMPLES, nValid);
+    const labs: Array<[number, number, number]> = [];
+
+    if (satW === 0 && contW === 0) {
+      // Fast path: uniform step
+      const step = Math.max(1, Math.floor(nValid / nSamples));
+      for (let i = 0; i < nValid && labs.length < nSamples; i += step) {
+        labs.push(rgbToLab(validR[i], validG[i], validB[i]));
+      }
+    } else {
+      // Weighted sampling via CDF — saturated / high-contrast pixels are sampled more often
+      const cdf = new Float32Array(nValid);
+      let cumSum = 0;
+      for (let i = 0; i < nValid; i++) { cumSum += validW[i]; cdf[i] = cumSum; }
+      for (let s = 0; s < nSamples; s++) {
+        const target = Math.random() * cumSum;
+        let lo = 0, hi = nValid - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
+        labs.push(rgbToLab(validR[lo], validG[lo], validB[lo]));
+      }
+    }
+
+    if (labs.length === 0) return Array(k).fill({ r: 128, g: 128, b: 128 });
+
+    // Run k-means with extra clusters so greedy selection has more to choose from
+    const clusters = kmeansLab(labs, Math.min(k + 4, labs.length));
+    const totalPop = clusters.reduce((s, c) => s + c.pop, 0);
+
+    // Prominent pool: clusters covering ≥ accentMinPop of sampled pixels
+    const minPopFrac = settings?.minClusterSize ?? DEFAULT_EXTRACTION_SETTINGS.minClusterSize;
+    const allCandidates = clusters.map((c) => ({ ...c.rgb, pop: c.pop, lab: c.centroid }));
+    const candidates = totalPop > 0
+      ? allCandidates.filter((c) => c.pop / totalPop >= minPopFrac)
+      : allCandidates;
+
+    // Greedy selection using LAB distance (same space as clustering).
+    // Adaptive scaling: larger k → lower threshold so the palette stays fillable.
+    const minDistBase = settings?.minColorDist ?? DEFAULT_EXTRACTION_SETTINGS.minColorDist;
+    const minDistAdaptive = Math.max(10, Math.round(minDistBase * Math.sqrt(5 / k)));
+    const MIN_LAB_SQ = minDistAdaptive * minDistAdaptive;
+    const colors: RGB[] = [];
+    const selectedLabs: Array<[number, number, number]> = [];
+
+    // Pass 1: prominent clusters, full adaptive LAB distance
     for (const c of candidates) {
       if (colors.length >= k) break;
-      const rgb = { r: c.r, g: c.g, b: c.b };
-      const tooClose = colors.some((existing) => rgbDistanceSq(existing, rgb) < MIN_DIST_SQ);
-      if (!tooClose) {
-        colors.push(rgb);
+      if (!selectedLabs.some((l) => labDistSq(l, c.lab) < MIN_LAB_SQ)) {
+        colors.push({ r: c.r, g: c.g, b: c.b });
+        selectedLabs.push(c.lab);
       }
     }
 
-    // If still short (very uniform frames), relax distance constraint
+    // Pass 2: relax to quarter distance
     if (colors.length < k) {
-      for (const c of candidates) {
+      const RELAXED_SQ = Math.max(50, Math.round(MIN_LAB_SQ / 4));
+      for (const c of allCandidates) {
         if (colors.length >= k) break;
-        const rgb = { r: c.r, g: c.g, b: c.b };
-        const duplicate = colors.some((existing) => rgbDistanceSq(existing, rgb) < 100);
-        if (!duplicate) {
-          colors.push(rgb);
+        if (!selectedLabs.some((l) => labDistSq(l, c.lab) < RELAXED_SQ)) {
+          colors.push({ r: c.r, g: c.g, b: c.b });
+          selectedLabs.push(c.lab);
         }
       }
     }
 
-    // Final fallback
-    while (colors.length < k) {
-      colors.push({ r: 128, g: 128, b: 128 });
+    // Pass 3: allow near-duplicates (blocks only perceptually identical, ΔE < 3)
+    if (colors.length < k) {
+      for (const c of allCandidates) {
+        if (colors.length >= k) break;
+        if (!selectedLabs.some((l) => labDistSq(l, c.lab) < 9)) {
+          colors.push({ r: c.r, g: c.g, b: c.b });
+          selectedLabs.push(c.lab);
+        }
+      }
     }
 
-    // Sort by perceptual luminance (dark to light)
-    colors.sort((a, b) => {
-      const lumA = 0.299 * a.r + 0.587 * a.g + 0.114 * a.b;
-      const lumB = 0.299 * b.r + 0.587 * b.g + 0.114 * b.b;
-      return lumA - lumB;
-    });
+    while (colors.length < k) colors.push({ r: 128, g: 128, b: 128 });
+
+    // Sort dark to light
+    colors.sort((a, b) =>
+      (0.299 * a.r + 0.587 * a.g + 0.114 * a.b) - (0.299 * b.r + 0.587 * b.g + 0.114 * b.b)
+    );
 
     return colors;
   } catch {
@@ -289,8 +444,9 @@ export function extractColorsAsync(
   k: number = 5,
   sampleSize?: number,
   explicitCrop?: CropBounds,
+  settings?: ExtractionSettings,
 ): Promise<RGB[]> {
-  return extractColorsFromCanvas(canvas, video, k, sampleSize, explicitCrop);
+  return extractColorsFromCanvas(canvas, video, k, sampleSize, explicitCrop, settings);
 }
 
 // --- Utilities ---
@@ -358,8 +514,8 @@ export function matchColorOrder(prevColors: RGB[], newColors: RGB[]): RGB[] {
 // --- Smooth interpolation ---
 const MAX_CHANNEL_DELTA = 35;
 // Changes below this RGB distance are considered compression noise and suppressed.
-// sqrt(625) = 25 units — covers frame-to-frame MMCQ bucket instability on static scenes.
-const DEADBAND_SQ = 625;
+// sqrt(3025) = 55 units — covers MMCQ bucket instability + H.264 noise on static scenes.
+const DEADBAND_SQ = 3025;
 
 function clampDelta(from: number, to: number, t: number): number {
   const raw = Math.round(from + (to - from) * t);
@@ -370,12 +526,13 @@ function clampDelta(from: number, to: number, t: number): number {
   return raw;
 }
 
-export function lerpColors(from: RGB[], to: RGB[], t: number): RGB[] {
+export function lerpColors(from: RGB[], to: RGB[], t: number, deadband?: number): RGB[] {
+  const deadbandSq = deadband !== undefined ? deadband * deadband : DEADBAND_SQ;
   return to.map((toColor, i) => {
     const fromColor = from[i] || toColor;
     // Suppress updates within the noise floor — prevents H.264 quantization
     // artifacts from causing visible flicker on visually static frames.
-    if (rgbDistanceSq(fromColor, toColor) <= DEADBAND_SQ) return fromColor;
+    if (rgbDistanceSq(fromColor, toColor) <= deadbandSq) return fromColor;
     return {
       r: clampDelta(fromColor.r, toColor.r, t),
       g: clampDelta(fromColor.g, toColor.g, t),

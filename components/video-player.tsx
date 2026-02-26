@@ -14,6 +14,7 @@ import {
 import {
   type RGB,
   type CropBounds,
+  type ExtractionSettings,
   extractColorsFromCanvas,
   extractColorsAsync,
 } from "@/lib/color-extractor";
@@ -155,6 +156,15 @@ function CropHandles({
   );
 }
 
+// --- Median buffer helpers ---
+
+const EXTRACTION_BUF_SIZE = 5;
+
+function medianChannel(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 // --- VideoPlayer ---
 
 interface VideoPlayerProps {
@@ -163,6 +173,7 @@ interface VideoPlayerProps {
   colorCount: number;
   colors: RGB[];
   userCrop: CropBounds;
+  extractionSettings?: ExtractionSettings;
   onCropChange: (crop: CropBounds) => void;
   onColorsExtracted: (colors: RGB[]) => void;
   onRemove: () => void;
@@ -176,6 +187,7 @@ export function VideoPlayer({
   colorCount,
   colors,
   userCrop,
+  extractionSettings,
   onCropChange,
   onColorsExtracted,
   onRemove,
@@ -191,6 +203,9 @@ export function VideoPlayer({
   const colorsRef = useRef<RGB[]>(colors);
   const colorCountRef = useRef(colorCount);
   const userCropRef = useRef<CropBounds>(userCrop);
+  const settingsRef = useRef<ExtractionSettings | undefined>(extractionSettings);
+  const prevExtractedRef = useRef<RGB[]>([]);
+  const extractionBufRef = useRef<RGB[][]>([]);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -200,7 +215,12 @@ export function VideoPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoDims, setVideoDims] = useState({ w: 0, h: 0 });
 
-  useEffect(() => { colorCountRef.current = colorCount; }, [colorCount]);
+  useEffect(() => {
+    colorCountRef.current = colorCount;
+    prevExtractedRef.current = [];
+    extractionBufRef.current = [];
+  }, [colorCount]);
+  useEffect(() => { settingsRef.current = extractionSettings; }, [extractionSettings]);
 
   // Draw only the cropped region + palette bar to the preview canvas.
   // Matches the export layout exactly: canvas = cropW × (cropH + paletteH).
@@ -262,8 +282,45 @@ export function VideoPlayer({
     const now = performance.now();
     if (now - lastExtractRef.current >= 66) {
       lastExtractRef.current = now;
-      extractColorsAsync(canvas, video, colorCount, undefined, userCropRef.current).then((extracted) => {
-        if (extracted.length > 0) onColorsExtracted(extracted);
+      extractColorsAsync(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current).then((extracted) => {
+        if (extracted.length === 0) return;
+        const deadband = settingsRef.current?.deadband ?? 55;
+        const deadbandSq = deadband * deadband;
+        const sceneCutSq = (deadband * 2) ** 2;
+        const prev = prevExtractedRef.current;
+
+        // Scene cut: flush buffer so stale frames don't pollute the median
+        const isSceneCut =
+          prev.length !== extracted.length ||
+          extracted.some((c, i) => {
+            const p = prev[i];
+            return !p || (c.r - p.r) ** 2 + (c.g - p.g) ** 2 + (c.b - p.b) ** 2 > sceneCutSq;
+          });
+        if (isSceneCut) extractionBufRef.current = [];
+
+        // Push into ring buffer
+        const buf = extractionBufRef.current;
+        buf.push(extracted);
+        if (buf.length > EXTRACTION_BUF_SIZE) buf.shift();
+
+        // Per-slot per-channel median absorbs k-means stochastic jitter
+        const smoothed: RGB[] = extracted.map((_, slot) => ({
+          r: medianChannel(buf.map((f) => f[slot]?.r ?? 0)),
+          g: medianChannel(buf.map((f) => f[slot]?.g ?? 0)),
+          b: medianChannel(buf.map((f) => f[slot]?.b ?? 0)),
+        }));
+
+        // Gate on median output, not raw extraction
+        const changed =
+          prev.length !== smoothed.length ||
+          smoothed.some((c, i) => {
+            const p = prev[i];
+            return !p || (c.r - p.r) ** 2 + (c.g - p.g) ** 2 + (c.b - p.b) ** 2 > deadbandSq;
+          });
+        if (changed) {
+          prevExtractedRef.current = smoothed;
+          onColorsExtracted(smoothed);
+        }
       });
       setCurrentTime(video.currentTime);
       drawPreview();
@@ -283,9 +340,13 @@ export function VideoPlayer({
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || !video.paused) return;
-    extractColorsFromCanvas(canvas, video, colorCountRef.current, undefined, userCropRef.current)
+    extractColorsFromCanvas(canvas, video, colorCountRef.current, undefined, userCropRef.current, settingsRef.current)
       .then((extracted) => {
-        if (extracted.length > 0) onColorsExtracted(extracted);
+        if (extracted.length > 0) {
+          extractionBufRef.current = [];
+          prevExtractedRef.current = extracted;
+          onColorsExtracted(extracted);
+        }
       });
   }, [onColorsExtracted]);
 
@@ -364,8 +425,12 @@ export function VideoPlayer({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     const canvas = canvasRef.current;
     if (canvas) {
-      extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current).then((extracted) => {
-        if (extracted.length > 0) onColorsExtracted(extracted);
+      extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current).then((extracted) => {
+        if (extracted.length > 0) {
+          extractionBufRef.current = [];
+          prevExtractedRef.current = extracted;
+          onColorsExtracted(extracted);
+        }
       });
     }
     setTimeout(drawPreview, 50);
@@ -394,8 +459,12 @@ export function VideoPlayer({
     if (canvas) {
       setTimeout(async () => {
         drawPreview();
-        const extracted = await extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current);
-        if (extracted.length > 0) onColorsExtracted(extracted);
+        const extracted = await extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current, settingsRef.current);
+        if (extracted.length > 0) {
+          extractionBufRef.current = [];
+          prevExtractedRef.current = extracted;
+          onColorsExtracted(extracted);
+        }
       }, 50);
     }
   };
@@ -439,6 +508,8 @@ export function VideoPlayer({
     if (!video) return;
     setDuration(video.duration);
     setVideoDims({ w: video.videoWidth, h: video.videoHeight });
+    prevExtractedRef.current = [];
+    extractionBufRef.current = [];
     setTimeout(drawPreview, 100);
   };
 

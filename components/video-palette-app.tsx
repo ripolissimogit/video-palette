@@ -1,14 +1,178 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { type RGB, type CropBounds, lerpColors, matchColorOrder } from "@/lib/color-extractor";
+import { type RGB, type CropBounds, type ExtractionSettings, DEFAULT_EXTRACTION_SETTINGS, lerpColors, matchColorOrder } from "@/lib/color-extractor";
 import { VideoDropzone } from "./video-dropzone";
 import { VideoPlayer } from "./video-player";
 import { PaletteBar } from "./palette-bar";
 import { ColorCountSelector } from "./color-count-selector";
 import { ExportPanel } from "./export-panel";
 import { ThemeToggle } from "./theme-toggle";
-import { Film } from "lucide-react";
+import { Film, Settings2, ChevronDown, RotateCcw } from "lucide-react";
+
+// --- Extraction controls UI ---
+
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <span className="relative group/tip inline-flex items-center">
+      <span className="ml-1.5 w-[14px] h-[14px] rounded-full bg-muted text-muted-foreground text-[9px] font-bold flex items-center justify-center cursor-help select-none leading-none shrink-0">
+        ?
+      </span>
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 px-3 py-2 rounded-lg bg-popover border border-border text-xs text-popover-foreground shadow-lg pointer-events-none opacity-0 group-hover/tip:opacity-100 transition-opacity duration-150 z-50 leading-relaxed">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function SliderRow({
+  label, tooltip, min, max, step, value, displayValue, onChange,
+}: {
+  label: string;
+  tooltip: string;
+  min: number; max: number; step: number;
+  value: number;
+  displayValue: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center text-sm text-foreground">
+          {label}
+          <InfoTooltip text={tooltip} />
+        </div>
+        <span className="text-xs font-mono text-muted-foreground tabular-nums">{displayValue}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-secondary [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125"
+      />
+    </div>
+  );
+}
+
+function ExtractionControls({
+  settings,
+  onChange,
+  sidebar = false,
+}: {
+  settings: ExtractionSettings;
+  onChange: (s: ExtractionSettings) => void;
+  sidebar?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const isDefault =
+    settings.deadband === DEFAULT_EXTRACTION_SETTINGS.deadband &&
+    settings.blendFactor === DEFAULT_EXTRACTION_SETTINGS.blendFactor &&
+    settings.minClusterSize === DEFAULT_EXTRACTION_SETTINGS.minClusterSize &&
+    settings.minColorDist === DEFAULT_EXTRACTION_SETTINGS.minColorDist &&
+    settings.saturationWeight === DEFAULT_EXTRACTION_SETTINGS.saturationWeight &&
+    settings.contrastWeight === DEFAULT_EXTRACTION_SETTINGS.contrastWeight;
+  const update = (key: keyof ExtractionSettings, value: number) =>
+    onChange({ ...settings, [key]: value });
+
+  const sliders = (
+    <>
+      <SliderRow
+        label="Stabilità"
+        tooltip="Soglia di variazione prima che la palette si aggiorni. Alta → solo i veri cambi di scena aggiornano i colori. Bassa → anche piccole variazioni vengono catturate."
+        min={0} max={80} step={1}
+        value={settings.deadband}
+        displayValue={String(settings.deadband)}
+        onChange={(v) => update("deadband", v)}
+      />
+      <SliderRow
+        label="Velocità"
+        tooltip="Con che rapidità cambiano i colori tra un frame e l'altro. Alta → aggiornamento quasi istantaneo. Bassa → transizione morbida e graduale."
+        min={0.05} max={1.0} step={0.05}
+        value={settings.blendFactor}
+        displayValue={Math.round(settings.blendFactor * 100) + "%"}
+        onChange={(v) => update("blendFactor", Math.round(v * 20) / 20)}
+      />
+      <SliderRow
+        label="Presenza minima"
+        tooltip="Quanto spazio deve occupare un colore nel frame per entrare nella palette. Alta → solo i colori dominanti. Bassa → include anche toni presenti in piccole aree."
+        min={0} max={10} step={0.5}
+        value={Math.round(settings.minClusterSize * 1000) / 10}
+        displayValue={(Math.round(settings.minClusterSize * 1000) / 10).toFixed(1) + "%"}
+        onChange={(v) => update("minClusterSize", v / 100)}
+      />
+      <SliderRow
+        label="Diversità"
+        tooltip="Quanto devono differire i colori estratti tra loro. Alta → palette con toni molto distanti. Bassa → include anche sfumature simili."
+        min={10} max={60} step={5}
+        value={settings.minColorDist}
+        displayValue={String(settings.minColorDist)}
+        onChange={(v) => update("minColorDist", v)}
+      />
+      <SliderRow
+        label="Peso saturazione"
+        tooltip="I pixel più saturi vengono campionati con più frequenza. Alto → i toni vividi dominano la palette. Zero → peso uniforme."
+        min={0} max={3} step={0.25}
+        value={settings.saturationWeight}
+        displayValue={settings.saturationWeight.toFixed(2)}
+        onChange={(v) => update("saturationWeight", v)}
+      />
+      <SliderRow
+        label="Peso contrasto"
+        tooltip="I pixel ad alto contrasto locale vengono campionati con più frequenza. Alto → la palette privilegia bordi netti e transizioni cromatiche."
+        min={0} max={3} step={0.25}
+        value={settings.contrastWeight}
+        displayValue={settings.contrastWeight.toFixed(2)}
+        onChange={(v) => update("contrastWeight", v)}
+      />
+      {!isDefault && (
+        <button
+          onClick={() => onChange(DEFAULT_EXTRACTION_SETTINGS)}
+          className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <RotateCcw className="w-3 h-3" /> Ripristina predefiniti
+        </button>
+      )}
+    </>
+  );
+
+  if (sidebar) {
+    return (
+      <div className="flex flex-col gap-5">
+        <div className="flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">Impostazioni</span>
+        </div>
+        {sliders}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-border rounded-xl">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-foreground hover:bg-secondary/50 transition-colors ${open ? "rounded-t-xl" : "rounded-xl"}`}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-muted-foreground" />
+          Impostazioni avanzate
+        </span>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-3 border-t border-border flex flex-col gap-4">
+          {sliders}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---
 
 const DEFAULT_COLORS: RGB[] = [
   { r: 30, g: 30, b: 40 },
@@ -26,6 +190,7 @@ export function VideoPaletteApp() {
   const [colors, setColors] = useState<RGB[]>(DEFAULT_COLORS);
   const [colorCount, setColorCount] = useState(5);
   const [userCrop, setUserCrop] = useState<CropBounds>(DEFAULT_CROP);
+  const [extractionSettings, setExtractionSettings] = useState<ExtractionSettings>(DEFAULT_EXTRACTION_SETTINGS);
   const latestColorsRef = useRef<RGB[]>(DEFAULT_COLORS);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -67,16 +232,15 @@ export function VideoPaletteApp() {
 
   const handleColorsExtracted = useCallback(
     (newColors: RGB[]) => {
-      // 1. Stable ordering: re-order new colors to match previous frame's slots
       const matched = matchColorOrder(latestColorsRef.current, newColors);
-      // 2. Smooth interpolation -- Median Cut is much more stable than K-means
-      //    so we can use a higher blend factor for more responsive colors
-      const blendFactor = reducedMotion ? 0.15 : 0.3;
-      const smoothed = lerpColors(latestColorsRef.current, matched, blendFactor);
+      const blend = reducedMotion
+        ? Math.min(extractionSettings.blendFactor, 0.15)
+        : extractionSettings.blendFactor;
+      const smoothed = lerpColors(latestColorsRef.current, matched, blend, 5);
       setColors(smoothed);
       latestColorsRef.current = smoothed;
     },
-    [reducedMotion]
+    [reducedMotion, extractionSettings]
   );
 
   const handleRemove = useCallback(() => {
@@ -147,11 +311,11 @@ export function VideoPaletteApp() {
 
       {/* Main content */}
       <main
-        className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col gap-6 sm:gap-8"
+        className="flex-1 w-full mx-auto px-4 sm:px-6 py-6 sm:py-8"
         role="main"
       >
         {!videoSrc ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-8">
+          <div className="max-w-4xl mx-auto flex-1 flex flex-col items-center justify-center gap-8">
             <div className="w-full max-w-xl">
               <VideoDropzone onVideoSelect={handleVideoSelect} />
             </div>
@@ -167,33 +331,41 @@ export function VideoPaletteApp() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-6">
-            {/* Fullscreen container: video + palette */}
-            <div
-              ref={fullscreenContainerRef}
-              className={`flex flex-col ${
-                isFullscreen
-                  ? "bg-background h-screen w-screen"
-                  : ""
-              }`}
-            >
-              {/* Video player with integrated palette preview */}
-              <div className={isFullscreen ? "flex-1 min-h-0" : ""} aria-live="polite" aria-label="Video and color palette">
-                <VideoPlayer
-                  src={videoSrc}
-                  fileName={videoName}
-                  colorCount={colorCount}
-                  colors={colors}
-                  userCrop={userCrop}
-                  onCropChange={handleCropChange}
-                  onColorsExtracted={handleColorsExtracted}
-                  onRemove={handleRemove}
-                  fullscreenContainerRef={fullscreenContainerRef}
-                  isExternalFullscreen={isFullscreen}
-                />
+          <div className="max-w-6xl mx-auto flex flex-col xl:flex-row gap-6 xl:gap-8">
+            {/* Video column */}
+            <div className="flex-1 min-w-0">
+              <div
+                ref={fullscreenContainerRef}
+                className={isFullscreen ? "bg-background h-screen w-screen flex flex-col" : ""}
+              >
+                <div className={isFullscreen ? "flex-1 min-h-0" : ""} aria-live="polite" aria-label="Video and color palette">
+                  <VideoPlayer
+                    src={videoSrc}
+                    fileName={videoName}
+                    colorCount={colorCount}
+                    colors={colors}
+                    userCrop={userCrop}
+                    extractionSettings={extractionSettings}
+                    onCropChange={handleCropChange}
+                    onColorsExtracted={handleColorsExtracted}
+                    onRemove={handleRemove}
+                    fullscreenContainerRef={fullscreenContainerRef}
+                    isExternalFullscreen={isFullscreen}
+                  />
+                </div>
               </div>
-
             </div>
+
+            {/* Sidebar: extraction controls */}
+            {!isFullscreen && (
+              <aside className="w-full xl:w-64 shrink-0 xl:border-l xl:border-border xl:pl-8 pt-1">
+                <ExtractionControls
+                  settings={extractionSettings}
+                  onChange={setExtractionSettings}
+                  sidebar
+                />
+              </aside>
+            )}
           </div>
         )}
       </main>

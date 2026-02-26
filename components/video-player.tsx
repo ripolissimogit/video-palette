@@ -464,6 +464,8 @@ export function VideoPlayer({
   const totalCanvasH  = cropH + palettePixelH;
   const canvasAspect  = videoDims.w > 0 ? `${cropW} / ${totalCanvasH}` : "16 / 9";
   const videoFraction = totalCanvasH > 0 ? cropH / totalCanvasH : 1;
+  // Aspect ratio as a number for viewport-fit width calculation
+  const ratio = videoDims.w > 0 ? cropW / totalCanvasH : 16 / 9;
 
   return (
     <div ref={wrapperRef} className={`flex flex-col ${isExternalFullscreen ? "h-full gap-2" : "gap-4"}`}>
@@ -474,6 +476,16 @@ export function VideoPlayer({
             ? "flex-1 min-h-0 flex items-center justify-center"
             : "rounded-xl"
         }`}
+        style={
+          !isExternalFullscreen
+            ? {
+                width: `min(100%, calc((100vh - 240px) * ${ratio}))`,
+                aspectRatio: canvasAspect,
+                maxHeight: "calc(100vh - 240px)",
+                margin: "0 auto",
+              }
+            : undefined
+        }
       >
         {/* Hidden video for playback */}
         <video
@@ -502,10 +514,9 @@ export function VideoPlayer({
           ref={previewCanvasRef}
           style={{
             display: "block",
-            aspectRatio: canvasAspect,
             ...(isExternalFullscreen
               ? { height: "100%", width: "auto" }
-              : { width: "100%" }
+              : { position: "absolute", inset: "0", width: "100%", height: "100%" }
             ),
           }}
         />

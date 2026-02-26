@@ -64,21 +64,25 @@ export async function GET() {
   checks.youtube_cache_dir = checkWritable("/tmp/youtube-cache");
   checks.jobs_store_dir    = checkWritable("/tmp/youtube-merge-jobs");
 
-  // --- yt-dlp binary ---
+  // --- yt-dlp: prefer system (nixpacks), fall back to /tmp download ---
+  checks.ytdlp_system = run("which yt-dlp");
+  checks.ytdlp_system_version = run("yt-dlp --version");
+
   const ytdlpPath = "/tmp/ytdlp-bin/yt-dlp";
-  checks.ytdlp_exists = {
+  checks.ytdlp_tmp_exists = {
     ok: existsSync(ytdlpPath),
-    output: existsSync(ytdlpPath)
-      ? "present"
-      : "not found (downloaded automatically on first YouTube request)",
+    output: existsSync(ytdlpPath) ? "present" : "not found",
   };
 
-  if (existsSync(ytdlpPath)) {
-    checks.ytdlp_version = run(`"${ytdlpPath}" --version`);
+  const ytdlpActive = checks.ytdlp_system_version.ok ? "yt-dlp" : ytdlpPath;
+  if (checks.ytdlp_system_version.ok || existsSync(ytdlpPath)) {
+    checks.ytdlp_version = checks.ytdlp_system_version.ok
+      ? checks.ytdlp_system_version
+      : run(`"${ytdlpPath}" --version`);
 
     // Connectivity test: fetch title + duration of a short public video.
     const ytTestResult = run(
-      `"${ytdlpPath}" --no-playlist --no-warnings --no-progress ` +
+      `"${ytdlpActive}" --no-playlist --no-warnings --no-progress ` +
         `--ffmpeg-location "${FFMPEG_PATH}" ` +
         `--print "%(title)s | %(duration)ss" ` +
         `-f "best[ext=mp4][vcodec!=none][acodec!=none]/best" ` +

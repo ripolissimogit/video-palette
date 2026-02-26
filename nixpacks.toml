@@ -1,6 +1,7 @@
 [phases.setup]
-# ffmpeg includes ffprobe. python3 is required by some yt-dlp internals.
-nixPkgs = ["ffmpeg", "python3"]
+# ffmpeg includes ffprobe. yt-dlp is the YouTube downloader.
+# python3 is required by some yt-dlp internals.
+nixPkgs = ["ffmpeg", "python3", "yt-dlp"]
 
 [phases.install]
 cmds = ["npm ci --prefer-offline"]

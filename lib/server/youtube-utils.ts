@@ -151,11 +151,33 @@ function validateMergedFileWithFfprobe(filePath: string) {
   }
 }
 
+function isExecutable(cmd: string): boolean {
+  try {
+    execSync(`"${cmd}" --version`, { stdio: "ignore", timeout: 8_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureYtDlp(): Promise<string> {
-  if (existsSync(YTDLP_PATH)) return YTDLP_PATH;
+  // 1. Prefer system yt-dlp (installed via nixpacks on Railway — no /tmp issues).
+  if (isExecutable("yt-dlp")) {
+    const version = execSync("yt-dlp --version", { encoding: "utf-8" }).trim();
+    console.log(`[youtube] Using system yt-dlp ${version}`);
+    return "yt-dlp";
+  }
 
+  // 2. Check if a previously downloaded binary is still executable.
+  //    (It may exist but be non-executable if /tmp is mounted noexec.)
+  if (existsSync(YTDLP_PATH)) {
+    if (isExecutable(YTDLP_PATH)) return YTDLP_PATH;
+    console.warn("[youtube] Cached yt-dlp binary is not executable — removing and re-downloading");
+    unlinkSync(YTDLP_PATH);
+  }
+
+  // 3. Download from GitHub as last resort.
   ensureDir(YTDLP_DIR);
-
   console.log("[youtube] Downloading yt-dlp binary...");
   const res = await fetch(YTDLP_URL);
   if (!res.ok) throw new Error(`Failed to download yt-dlp: ${res.status}`);
@@ -164,11 +186,16 @@ export async function ensureYtDlp(): Promise<string> {
   writeFileSync(YTDLP_PATH, buffer);
   chmodSync(YTDLP_PATH, 0o755);
 
-  const version = execSync(`"${YTDLP_PATH}" --version`, {
-    encoding: "utf-8",
-  }).trim();
-  console.log(`[youtube] yt-dlp ${version} ready`);
+  if (!isExecutable(YTDLP_PATH)) {
+    throw new Error(
+      `yt-dlp binary is not executable at ${YTDLP_PATH}. ` +
+        "This usually means /tmp is mounted noexec. " +
+        "Ensure nixpacks.toml includes yt-dlp in nixPkgs so it is installed system-wide."
+    );
+  }
 
+  const version = execSync(`"${YTDLP_PATH}" --version`, { encoding: "utf-8" }).trim();
+  console.log(`[youtube] yt-dlp ${version} ready`);
   return YTDLP_PATH;
 }
 

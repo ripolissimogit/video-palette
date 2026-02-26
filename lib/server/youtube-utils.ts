@@ -11,6 +11,11 @@ import {
 } from "fs";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
+// Static ffmpeg/ffprobe binaries bundled in node_modules — no system install needed.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const FFMPEG_PATH: string = require("ffmpeg-static") as string;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const FFPROBE_PATH: string = (require("@ffprobe-installer/ffprobe") as { path: string }).path;
 
 const YTDLP_DIR = "/tmp/ytdlp-bin";
 const YTDLP_PATH = `${YTDLP_DIR}/yt-dlp`;
@@ -51,15 +56,11 @@ export function isValidVideoId(videoId: string): boolean {
 }
 
 function ensureFfmpegTools(): void {
-  try {
-    execSync("ffmpeg -version", { stdio: "ignore" });
-  } catch {
-    throw new Error("ffmpeg not found in PATH — ensure nixpacks.toml includes nixPkgs=[\"ffmpeg\"]");
+  if (!FFMPEG_PATH || !existsSync(FFMPEG_PATH)) {
+    throw new Error(`ffmpeg-static binary not found at: ${FFMPEG_PATH}`);
   }
-  try {
-    execSync("ffprobe -version", { stdio: "ignore" });
-  } catch {
-    throw new Error("ffprobe not found in PATH — it should be bundled with the ffmpeg nixpkg");
+  if (!FFPROBE_PATH || !existsSync(FFPROBE_PATH)) {
+    throw new Error(`ffprobe binary not found at: ${FFPROBE_PATH}`);
   }
 }
 
@@ -133,7 +134,7 @@ function enforceCacheSizeLimit(excludePath?: string) {
 
 function validateMergedFileWithFfprobe(filePath: string) {
   const output = execSync(
-    `ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "${filePath}"`,
+    `"${FFPROBE_PATH}" -v error -show_entries stream=codec_type -of csv=p=0 "${filePath}"`,
     { encoding: "utf-8", timeout: 30_000 }
   );
   const lines = output
@@ -193,6 +194,7 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
     "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
   const cmd =
     `"${ytdlp}" --no-playlist --no-progress --no-warnings ` +
+    `--ffmpeg-location "${FFMPEG_PATH}" ` +
     `-f "${formatStr}" --merge-output-format mp4 ` +
     `--output "${mergedPath}" "${sourceUrl}"`;
 

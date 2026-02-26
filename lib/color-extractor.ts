@@ -206,13 +206,17 @@ export async function extractColorsFromCanvas(
     // Also collect named Vibrant swatch (the accent) to guarantee inclusion
     const vibrantSwatch = palette.Vibrant;
     let accent: RGB | null = null;
+    let accentPop = 0;
     if (vibrantSwatch) {
       accent = {
         r: Math.round(vibrantSwatch.rgb[0]),
         g: Math.round(vibrantSwatch.rgb[1]),
         b: Math.round(vibrantSwatch.rgb[2]),
       };
+      accentPop = vibrantSwatch.population;
     }
+
+    const totalPop = allQuantized.reduce((sum: number, s: { population: number }) => sum + s.population, 0);
 
     // Greedy selection: pick colors by population, enforcing minimum perceptual distance
     const MIN_DIST_SQ = 2500; // ~50 RGB units apart
@@ -224,12 +228,17 @@ export async function extractColorsFromCanvas(
       colors.push({ r: top.r, g: top.g, b: top.b });
     }
 
-    // If accent is far enough from the dominant AND meaningfully saturated, guarantee it a slot.
-    // The saturation gate prevents compression artifacts in B&W footage from being promoted.
+    // Guarantee the Vibrant accent a slot only when it:
+    //   1. Is perceptually far from the dominant color (>50 RGB units)
+    //   2. Has meaningful saturation (>8%) — guards against B&W artifact colors
+    //   3. Represents at least 2% of frame pixels — guards against micro-details
+    //      (e.g. solar panel glint, tiny logo) being promoted over dominant tones
     const MIN_ACCENT_SAT = 0.08;
+    const MIN_ACCENT_POP_FRAC = 0.02;
     if (accent && colors.length > 0) {
       const dist = rgbDistanceSq(accent, colors[0]);
-      if (dist >= MIN_DIST_SQ && rgbSaturation(accent) >= MIN_ACCENT_SAT) {
+      const popFrac = totalPop > 0 ? accentPop / totalPop : 0;
+      if (dist >= MIN_DIST_SQ && rgbSaturation(accent) >= MIN_ACCENT_SAT && popFrac >= MIN_ACCENT_POP_FRAC) {
         colors.push(accent);
       }
     }

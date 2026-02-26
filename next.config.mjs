@@ -11,6 +11,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Prevent bundling of server-only binary packages (ffmpeg, ffprobe).
+  // These are resolved at runtime from node_modules on the server.
+  serverExternalPackages: ["ffmpeg-static", "@ffprobe-installer/ffprobe"],
   turbopack: {
     root: __dirname,
   },

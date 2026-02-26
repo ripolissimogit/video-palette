@@ -51,8 +51,16 @@ export function isValidVideoId(videoId: string): boolean {
 }
 
 function ensureFfmpegTools(): void {
-  execSync("ffmpeg -version", { stdio: "ignore" });
-  execSync("ffprobe -version", { stdio: "ignore" });
+  try {
+    execSync("ffmpeg -version", { stdio: "ignore" });
+  } catch {
+    throw new Error("ffmpeg not found in PATH — ensure nixpacks.toml includes nixPkgs=[\"ffmpeg\"]");
+  }
+  try {
+    execSync("ffprobe -version", { stdio: "ignore" });
+  } catch {
+    throw new Error("ffprobe not found in PATH — it should be bundled with the ffmpeg nixpkg");
+  }
 }
 
 function getMergedVideoPath(videoId: string): string {

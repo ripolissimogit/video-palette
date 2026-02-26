@@ -177,8 +177,10 @@ async function processJob(jobId: string) {
     job.error = null;
     job.updatedAt = Date.now();
   } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[youtube-merge] job ${jobId} (${job.videoId}) FAILED:`, msg);
     job.status = "failed";
-    job.error = error instanceof Error ? error.message : "Unknown error";
+    job.error = msg;
     job.message = "Failed to prepare high-quality stream";
     job.updatedAt = Date.now();
   } finally {

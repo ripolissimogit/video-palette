@@ -8,7 +8,6 @@ import {
   createReadStream,
   readdirSync,
   unlinkSync,
-  renameSync,
 } from "fs";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
@@ -123,47 +122,6 @@ function enforceCacheSizeLimit(excludePath?: string) {
   }
 }
 
-function detectBlackBarCrop(videoPath: string): string | null {
-  try {
-    const out = execSync(
-      `ffmpeg -i "${videoPath}" -t 15 -vf "cropdetect=limit=24:round=16:skip=2" -f null - 2>&1 || true`,
-      { encoding: "utf-8", timeout: 30_000 }
-    );
-    const matches = [...out.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)];
-    if (matches.length === 0) return null;
-
-    const [, wStr, hStr, xStr, yStr] = matches[matches.length - 1];
-    const [w, h, x, y] = [wStr, hStr, xStr, yStr].map(Number);
-
-    const probe = execSync(
-      `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${videoPath}"`,
-      { encoding: "utf-8", timeout: 10_000 }
-    );
-    const [origW, origH] = probe.trim().split(",").map(Number);
-
-    if (!origW || !origH || (w >= origW && h >= origH)) return null;
-    return `crop=${w}:${h}:${x}:${y}`;
-  } catch {
-    return null;
-  }
-}
-
-function applyCropToVideo(videoPath: string, cropFilter: string): void {
-  const tmpPath = `${videoPath}.tmp.mp4`;
-  try {
-    execSync(
-      `ffmpeg -i "${videoPath}" -vf "${cropFilter}" -c:v libx264 -preset fast -crf 18 -c:a copy "${tmpPath}"`,
-      { encoding: "utf-8", timeout: 5 * 60_000, maxBuffer: 10 * 1024 * 1024 }
-    );
-    unlinkSync(videoPath);
-    renameSync(tmpPath, videoPath);
-  } catch (err) {
-    if (existsSync(tmpPath)) {
-      try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    }
-    throw err;
-  }
-}
 
 function validateMergedFileWithFfprobe(filePath: string) {
   const output = execSync(
@@ -242,12 +200,6 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
   }
 
   validateMergedFileWithFfprobe(mergedPath);
-
-  const cropFilter = detectBlackBarCrop(mergedPath);
-  if (cropFilter) {
-    console.log(`[youtube] Removing black bars: ${cropFilter}`);
-    applyCropToVideo(mergedPath, cropFilter);
-  }
 
   enforceCacheSizeLimit(mergedPath);
   return mergedPath;

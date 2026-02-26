@@ -140,17 +140,15 @@ export function hasCrop(crop: CropBounds): boolean {
 
 const TARGET_WIDTH = 220;
 
-let cachedW = 0;
-let cachedH = 0;
-
 function drawVideoToCanvas(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
+  explicitCrop?: CropBounds,
 ): CanvasRenderingContext2D | null {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx || !video.videoWidth) return null;
 
-  const crop = detectLetterbox(video);
+  const crop = explicitCrop ?? detectLetterbox(video);
 
   // Source region (cropped area of the video)
   const sx = Math.round(crop.left * video.videoWidth);
@@ -159,15 +157,8 @@ function drawVideoToCanvas(
   const sh = video.videoHeight - sy - Math.round(crop.bottom * video.videoHeight);
 
   const scale = Math.min(1, TARGET_WIDTH / sw);
-  const targetW = Math.round(sw * scale);
-  const targetH = Math.round(sh * scale);
-
-  if (cachedW !== targetW || cachedH !== targetH) {
-    canvas.width = targetW;
-    canvas.height = targetH;
-    cachedW = targetW;
-    cachedH = targetH;
-  }
+  canvas.width  = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
 
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   return ctx;
@@ -182,8 +173,9 @@ export async function extractColorsFromCanvas(
   video: HTMLVideoElement,
   k: number = 5,
   _sampleSize?: number,
+  explicitCrop?: CropBounds,
 ): Promise<RGB[]> {
-  const ctx = drawVideoToCanvas(canvas, video);
+  const ctx = drawVideoToCanvas(canvas, video, explicitCrop);
   if (!ctx) return [];
 
   try {
@@ -232,10 +224,12 @@ export async function extractColorsFromCanvas(
       colors.push({ r: top.r, g: top.g, b: top.b });
     }
 
-    // If accent is far enough from the dominant, guarantee it a slot
+    // If accent is far enough from the dominant AND meaningfully saturated, guarantee it a slot.
+    // The saturation gate prevents compression artifacts in B&W footage from being promoted.
+    const MIN_ACCENT_SAT = 0.08;
     if (accent && colors.length > 0) {
       const dist = rgbDistanceSq(accent, colors[0]);
-      if (dist >= MIN_DIST_SQ) {
+      if (dist >= MIN_DIST_SQ && rgbSaturation(accent) >= MIN_ACCENT_SAT) {
         colors.push(accent);
       }
     }
@@ -285,8 +279,9 @@ export function extractColorsAsync(
   video: HTMLVideoElement,
   k: number = 5,
   sampleSize?: number,
+  explicitCrop?: CropBounds,
 ): Promise<RGB[]> {
-  return extractColorsFromCanvas(canvas, video, k, sampleSize);
+  return extractColorsFromCanvas(canvas, video, k, sampleSize, explicitCrop);
 }
 
 // --- Utilities ---
@@ -311,6 +306,15 @@ export function getContrastColor(color: RGB): string {
 
 function rgbDistanceSq(a: RGB, b: RGB): number {
   return (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2;
+}
+
+// HSL saturation (0–1). Returns 0 for pure grays.
+function rgbSaturation(c: RGB): number {
+  const r = c.r / 255, g = c.g / 255, b = c.b / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  if (max === min) return 0;
+  const l = (max + min) / 2;
+  return (max - min) / (1 - Math.abs(2 * l - 1));
 }
 
 export function matchColorOrder(prevColors: RGB[], newColors: RGB[]): RGB[] {

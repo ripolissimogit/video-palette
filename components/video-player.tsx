@@ -16,14 +16,154 @@ import {
   type CropBounds,
   extractColorsFromCanvas,
   extractColorsAsync,
-  detectLetterbox,
-  hasCrop,
 } from "@/lib/color-extractor";
+
+// --- Crop handles ---
+// Handles are always at the canvas edges. Dragging inward crops more, outward uncrop.
+
+type HandleType = "top" | "bottom" | "left" | "right" | "tl" | "tr" | "bl" | "br";
+
+function CropHandles({
+  crop,
+  videoFraction,
+  onCropChange,
+  onResetCrop,
+  onDragEnd,
+}: {
+  crop: CropBounds;
+  videoFraction: number;
+  onCropChange: (crop: CropBounds) => void;
+  onResetCrop: () => void;
+  onDragEnd: () => void;
+}) {
+  const areaRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    type: HandleType;
+    startX: number;
+    startY: number;
+    startCrop: CropBounds;
+  } | null>(null);
+
+  const MIN_VISIBLE = 0.05;
+  const hasCrop = crop.top > 0 || crop.bottom > 0 || crop.left > 0 || crop.right > 0;
+
+  const startDrag = useCallback(
+    (type: HandleType, e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = { type, startX: e.clientX, startY: e.clientY, startCrop: { ...crop } };
+    },
+    [crop]
+  );
+
+  const moveDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = dragRef.current;
+      if (!drag || !areaRef.current) return;
+      const rect = areaRef.current.getBoundingClientRect();
+      // dx/dy are in fractions of the cropped canvas; scale to full-video fractions
+      const s = drag.startCrop;
+      const scaleX = 1 - s.left - s.right;
+      const scaleY = 1 - s.top  - s.bottom;
+      const dx = ((e.clientX - drag.startX) / rect.width)  * scaleX;
+      const dy = ((e.clientY - drag.startY) / rect.height) * scaleY;
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+      const n: CropBounds = { ...s };
+
+      if (drag.type === "top"    || drag.type === "tl" || drag.type === "tr")
+        n.top    = clamp(s.top + dy,    0, 1 - s.bottom - MIN_VISIBLE);
+      if (drag.type === "bottom" || drag.type === "bl" || drag.type === "br")
+        n.bottom = clamp(s.bottom - dy, 0, 1 - s.top    - MIN_VISIBLE);
+      if (drag.type === "left"   || drag.type === "tl" || drag.type === "bl")
+        n.left   = clamp(s.left + dx,   0, 1 - s.right  - MIN_VISIBLE);
+      if (drag.type === "right"  || drag.type === "tr" || drag.type === "br")
+        n.right  = clamp(s.right - dx,  0, 1 - s.left   - MIN_VISIBLE);
+
+      onCropChange(n);
+    },
+    [onCropChange]
+  );
+
+  const endDrag = useCallback(() => {
+    if (dragRef.current) {
+      dragRef.current = null;
+      onDragEnd();
+    }
+  }, [onDragEnd]);
+
+  // Handles are always at the edges of the cropped canvas (0% / 50% / 100%)
+  const mkHandle = (type: HandleType, left: string, top: string, w: number, h: number, cursor: string) => (
+    <div
+      key={type}
+      onPointerDown={(e) => startDrag(type, e)}
+      onPointerMove={moveDrag}
+      onPointerUp={endDrag}
+      style={{
+        position: "absolute",
+        left,
+        top,
+        transform: "translate(-50%, -50%)",
+        width: w,
+        height: h,
+        borderRadius: Math.min(w, h) / 2,
+        background: "white",
+        boxShadow: "0 1px 6px rgba(0,0,0,0.6)",
+        cursor,
+        pointerEvents: "auto",
+        touchAction: "none",
+        zIndex: 10,
+      }}
+    />
+  );
+
+  return (
+    <div
+      ref={areaRef}
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        height: `${videoFraction * 100}%`,
+        pointerEvents: "none",
+      }}
+    >
+      {hasCrop && (
+        <button
+          onClick={onResetCrop}
+          style={{ position: "absolute", top: 8, left: 8, pointerEvents: "auto", zIndex: 20 }}
+          className="px-2 py-1 rounded-md bg-white/90 text-black text-[11px] font-medium shadow-md hover:bg-white transition-colors"
+          aria-label="Reset crop"
+        >
+          ↺ Reset
+        </button>
+      )}
+
+      {/* Edge handles — always at 0% / 50% / 100% of the overlay */}
+      {mkHandle("top",    "50%", "0%",   40, 10, "ns-resize")}
+      {mkHandle("bottom", "50%", "100%", 40, 10, "ns-resize")}
+      {mkHandle("left",   "0%",  "50%",  10, 40, "ew-resize")}
+      {mkHandle("right",  "100%","50%",  10, 40, "ew-resize")}
+
+      {/* Corner handles */}
+      {mkHandle("tl", "0%",   "0%",   14, 14, "nwse-resize")}
+      {mkHandle("tr", "100%", "0%",   14, 14, "nesw-resize")}
+      {mkHandle("bl", "0%",   "100%", 14, 14, "nesw-resize")}
+      {mkHandle("br", "100%", "100%", 14, 14, "nwse-resize")}
+    </div>
+  );
+}
+
+// --- VideoPlayer ---
 
 interface VideoPlayerProps {
   src: string;
   fileName: string;
   colorCount: number;
+  colors: RGB[];
+  userCrop: CropBounds;
+  onCropChange: (crop: CropBounds) => void;
   onColorsExtracted: (colors: RGB[]) => void;
   onRemove: () => void;
   fullscreenContainerRef?: React.RefObject<HTMLDivElement | null>;
@@ -34,6 +174,9 @@ export function VideoPlayer({
   src,
   fileName,
   colorCount,
+  colors,
+  userCrop,
+  onCropChange,
   onColorsExtracted,
   onRemove,
   fullscreenContainerRef,
@@ -41,9 +184,13 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const lastExtractRef = useRef<number>(0);
+  const colorsRef = useRef<RGB[]>(colors);
+  const colorCountRef = useRef(colorCount);
+  const userCropRef = useRef<CropBounds>(userCrop);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -51,10 +198,62 @@ export function VideoPlayer({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [crop, setCrop] = useState<CropBounds | null>(null);
-  const cropDetectedRef = useRef(false);
+  const [videoDims, setVideoDims] = useState({ w: 0, h: 0 });
 
-  // Async extraction via Web Worker (~15fps throttle, ~66ms)
+  useEffect(() => { colorCountRef.current = colorCount; }, [colorCount]);
+
+  // Draw only the cropped region + palette bar to the preview canvas.
+  // Matches the export layout exactly: canvas = cropW × (cropH + paletteH).
+  const drawPreview = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = previewCanvasRef.current;
+    if (!video || !canvas || !video.videoWidth) return;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const k = colorCountRef.current;
+    const crop = userCropRef.current;
+
+    const leftPx   = Math.round(crop.left   * vw);
+    const rightPx  = Math.round(crop.right  * vw);
+    const topPx    = Math.round(crop.top    * vh);
+    const bottomPx = Math.round(crop.bottom * vh);
+    const cropW = Math.max(1, vw - leftPx - rightPx);
+    const cropH = Math.max(1, vh - topPx - bottomPx);
+    const pH = Math.round(cropW / k);
+
+    if (canvas.width !== cropW || canvas.height !== cropH + pH) {
+      canvas.width  = cropW;
+      canvas.height = cropH + pH;
+    }
+
+    // Draw only the visible (non-cropped) region
+    ctx.drawImage(video, leftPx, topPx, cropW, cropH, 0, 0, cropW, cropH);
+
+    // Palette bar immediately below the visible content
+    const swatchW = cropW / k;
+    colorsRef.current.forEach((color, i) => {
+      ctx.fillStyle = `rgb(${color.r},${color.g},${color.b})`;
+      ctx.fillRect(Math.round(i * swatchW), cropH, Math.ceil(swatchW), pH);
+    });
+  }, []);
+
+  // Sync colorsRef and redraw when colors change
+  useEffect(() => {
+    colorsRef.current = colors;
+    drawPreview();
+  }, [colors, drawPreview]);
+
+  // Sync userCropRef and redraw when crop changes
+  useEffect(() => {
+    userCropRef.current = userCrop;
+    drawPreview();
+  }, [userCrop, drawPreview]);
+
+  // Async extraction (~15fps throttle) + preview frame draw
   const extractColors = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -63,15 +262,15 @@ export function VideoPlayer({
     const now = performance.now();
     if (now - lastExtractRef.current >= 66) {
       lastExtractRef.current = now;
-      // Fire and forget: don't block on previous extraction
-      extractColorsAsync(canvas, video, colorCount).then((colors) => {
-        if (colors.length > 0) onColorsExtracted(colors);
+      extractColorsAsync(canvas, video, colorCount, undefined, userCropRef.current).then((extracted) => {
+        if (extracted.length > 0) onColorsExtracted(extracted);
       });
       setCurrentTime(video.currentTime);
+      drawPreview();
     }
 
     rafRef.current = requestAnimationFrame(extractColors);
-  }, [colorCount, onColorsExtracted]);
+  }, [colorCount, onColorsExtracted, drawPreview]);
 
   useEffect(() => {
     return () => {
@@ -79,10 +278,20 @@ export function VideoPlayer({
     };
   }, []);
 
+  // Re-extract on crop drag end (only when paused)
+  const handleCropDragEnd = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !video.paused) return;
+    extractColorsFromCanvas(canvas, video, colorCountRef.current, undefined, userCropRef.current)
+      .then((extracted) => {
+        if (extracted.length > 0) onColorsExtracted(extracted);
+      });
+  }, [onColorsExtracted]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
@@ -133,11 +342,8 @@ export function VideoPlayer({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isPlaying, volume, duration]);
 
-  // Fullscreen change listener
   useEffect(() => {
-    const handler = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
@@ -158,10 +364,11 @@ export function VideoPlayer({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     const canvas = canvasRef.current;
     if (canvas) {
-      extractColorsFromCanvas(canvas, video, colorCount).then((colors) => {
-        if (colors.length > 0) onColorsExtracted(colors);
+      extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current).then((extracted) => {
+        if (extracted.length > 0) onColorsExtracted(extracted);
       });
     }
+    setTimeout(drawPreview, 50);
   };
 
   const handleTogglePlay = () => {
@@ -186,8 +393,9 @@ export function VideoPlayer({
     const canvas = canvasRef.current;
     if (canvas) {
       setTimeout(async () => {
-        const colors = await extractColorsFromCanvas(canvas, video, colorCount);
-        if (colors.length > 0) onColorsExtracted(colors);
+        drawPreview();
+        const extracted = await extractColorsFromCanvas(canvas, video, colorCount, undefined, userCropRef.current);
+        if (extracted.length > 0) onColorsExtracted(extracted);
       }, 50);
     }
   };
@@ -213,7 +421,6 @@ export function VideoPlayer({
   };
 
   const toggleFullscreen = async () => {
-    // Prefer external container (wraps palette too), fall back to player wrapper
     const target = fullscreenContainerRef?.current || wrapperRef.current;
     if (!target) return;
     try {
@@ -231,25 +438,8 @@ export function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
     setDuration(video.duration);
-    cropDetectedRef.current = false;
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      setTimeout(async () => {
-        const colors = await extractColorsFromCanvas(canvas, video, colorCount);
-        if (colors.length > 0) {
-          onColorsExtracted(colors);
-          // Detect letterbox after first successful extraction (frame is decoded)
-          if (!cropDetectedRef.current) {
-            cropDetectedRef.current = true;
-            const detected = detectLetterbox(video);
-            if (hasCrop(detected)) {
-              setCrop(detected);
-            }
-          }
-        }
-      }, 100);
-    }
+    setVideoDims({ w: video.videoWidth, h: video.videoHeight });
+    setTimeout(drawPreview, 100);
   };
 
   const handleVideoEnd = () => {
@@ -263,23 +453,33 @@ export function VideoPlayer({
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  // Canvas dimensions: cropped region + palette bar (matches export exactly)
+  const cropLeftPx  = Math.round(userCrop.left   * videoDims.w);
+  const cropRightPx = Math.round(userCrop.right  * videoDims.w);
+  const cropTopPx   = Math.round(userCrop.top    * videoDims.h);
+  const cropBotPx   = Math.round(userCrop.bottom * videoDims.h);
+  const cropW = Math.max(1, videoDims.w - cropLeftPx - cropRightPx);
+  const cropH = Math.max(1, videoDims.h - cropTopPx  - cropBotPx);
+  const palettePixelH = videoDims.w > 0 ? Math.round(cropW / colorCount) : 0;
+  const totalCanvasH  = cropH + palettePixelH;
+  const canvasAspect  = videoDims.w > 0 ? `${cropW} / ${totalCanvasH}` : "16 / 9";
+  const videoFraction = totalCanvasH > 0 ? cropH / totalCanvasH : 1;
+
   return (
     <div ref={wrapperRef} className={`flex flex-col ${isExternalFullscreen ? "h-full gap-2" : "gap-4"}`}>
-      {/* Video container */}
-      <div className={`relative overflow-hidden bg-black/50 group ${isExternalFullscreen ? "flex-1 min-h-0" : "rounded-xl"}`}>
+      {/* Preview canvas container */}
+      <div
+        className={`relative bg-black group ${
+          isExternalFullscreen
+            ? "flex-1 min-h-0 flex items-center justify-center"
+            : "rounded-xl"
+        }`}
+      >
+        {/* Hidden video for playback */}
         <video
           ref={videoRef}
           src={src}
-          className={`w-full object-contain ${
-            isExternalFullscreen ? "h-full" : "max-h-[50vh]"
-          }`}
-          style={
-            crop && hasCrop(crop)
-              ? {
-                  clipPath: `inset(${(crop.top * 100).toFixed(1)}% ${(crop.right * 100).toFixed(1)}% ${(crop.bottom * 100).toFixed(1)}% ${(crop.left * 100).toFixed(1)}%)`,
-                }
-              : undefined
-          }
+          className="hidden"
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={handleVideoEnd}
           onPlay={() => {
@@ -293,14 +493,44 @@ export function VideoPlayer({
           playsInline
           crossOrigin="anonymous"
         />
+
+        {/* Hidden canvas for color extraction */}
         <canvas ref={canvasRef} className="hidden" />
 
-        {/* Center overlay play/pause */}
-        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-black/20">
+        {/* Preview canvas: cropped content + palette bar — identical to export */}
+        <canvas
+          ref={previewCanvasRef}
+          style={{
+            display: "block",
+            aspectRatio: canvasAspect,
+            ...(isExternalFullscreen
+              ? { height: "100%", width: "auto" }
+              : { width: "100%" }
+            ),
+          }}
+        />
+
+        {/* Crop handles — at the edges of the canvas, covering only the video portion */}
+        {videoDims.w > 0 && (
+          <CropHandles
+            crop={userCrop}
+            videoFraction={videoFraction}
+            onCropChange={onCropChange}
+            onResetCrop={() => onCropChange({ top: 0, bottom: 0, left: 0, right: 0 })}
+            onDragEnd={handleCropDragEnd}
+          />
+        )}
+
+        {/* Center overlay play/pause — pointer-events:none so handles stay interactive */}
+        <div
+          className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-black/20"
+          style={{ pointerEvents: "none" }}
+        >
           <button
             onClick={handleTogglePlay}
             className="w-16 h-16 rounded-full bg-foreground/90 flex items-center justify-center text-background backdrop-blur-sm transition-transform hover:scale-105 active:scale-95"
             aria-label={isPlaying ? "Pause (Space)" : "Play (Space)"}
+            style={{ pointerEvents: "auto" }}
           >
             {isPlaying ? (
               <Pause className="w-6 h-6" />

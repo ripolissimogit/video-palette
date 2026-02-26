@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { type RGB, lerpColors, matchColorOrder } from "@/lib/color-extractor";
+import { type RGB, type CropBounds, lerpColors, matchColorOrder } from "@/lib/color-extractor";
 import { VideoDropzone } from "./video-dropzone";
 import { VideoPlayer } from "./video-player";
 import { PaletteBar } from "./palette-bar";
@@ -18,11 +18,14 @@ const DEFAULT_COLORS: RGB[] = [
   { r: 200, g: 195, b: 210 },
 ];
 
+const DEFAULT_CROP: CropBounds = { top: 0, bottom: 0, left: 0, right: 0 };
+
 export function VideoPaletteApp() {
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoName, setVideoName] = useState("");
   const [colors, setColors] = useState<RGB[]>(DEFAULT_COLORS);
   const [colorCount, setColorCount] = useState(5);
+  const [userCrop, setUserCrop] = useState<CropBounds>(DEFAULT_CROP);
   const latestColorsRef = useRef<RGB[]>(DEFAULT_COLORS);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -55,6 +58,11 @@ export function VideoPaletteApp() {
   const handleVideoSelect = useCallback((url: string, name: string) => {
     setVideoSrc(url);
     setVideoName(name);
+    setUserCrop(DEFAULT_CROP);
+  }, []);
+
+  const handleCropChange = useCallback((crop: CropBounds) => {
+    setUserCrop(crop);
   }, []);
 
   const handleColorsExtracted = useCallback(
@@ -77,6 +85,7 @@ export function VideoPaletteApp() {
     setVideoName("");
     setColors(DEFAULT_COLORS);
     latestColorsRef.current = DEFAULT_COLORS;
+    setUserCrop(DEFAULT_CROP);
   }, [videoSrc]);
 
   const handleColorCountChange = useCallback((count: number) => {
@@ -118,6 +127,7 @@ export function VideoPaletteApp() {
                   videoSrc={videoSrc}
                   colorCount={colorCount}
                   colors={colors}
+                  userCrop={userCrop}
                 />
               </>
             )}
@@ -167,26 +177,20 @@ export function VideoPaletteApp() {
                   : ""
               }`}
             >
-              {/* Video player - in fullscreen takes remaining space */}
-              <div className={isFullscreen ? "flex-1 min-h-0" : ""}>
+              {/* Video player with integrated palette preview */}
+              <div className={isFullscreen ? "flex-1 min-h-0" : ""} aria-live="polite" aria-label="Video and color palette">
                 <VideoPlayer
                   src={videoSrc}
                   fileName={videoName}
                   colorCount={colorCount}
+                  colors={colors}
+                  userCrop={userCrop}
+                  onCropChange={handleCropChange}
                   onColorsExtracted={handleColorsExtracted}
                   onRemove={handleRemove}
                   fullscreenContainerRef={fullscreenContainerRef}
                   isExternalFullscreen={isFullscreen}
                 />
-              </div>
-
-              {/* Live palette - thin strip */}
-              <div
-                aria-live="polite"
-                aria-label="Current color palette"
-                className={isFullscreen ? "shrink-0" : ""}
-              >
-                <PaletteBar colors={colors} compact={isFullscreen} />
               </div>
 
             </div>

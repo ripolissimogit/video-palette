@@ -13,11 +13,11 @@ import {
 } from "lucide-react";
 import {
   type RGB,
+  type CropBounds,
   rgbToHex,
   getContrastColor,
   extractColorsFromCanvas,
   matchColorOrder,
-  detectLetterbox,
 } from "@/lib/color-extractor";
 
 type AspectRatioOption = "original" | "instagram4x5";
@@ -35,6 +35,7 @@ interface ExportPanelProps {
   videoSrc: string;
   colorCount: number;
   colors: RGB[];
+  userCrop: CropBounds;
 }
 
 function getSupportedMimeType(candidates: string[]): string | null {
@@ -158,6 +159,7 @@ export function ExportPanel({
   videoSrc,
   colorCount,
   colors,
+  userCrop,
 }: ExportPanelProps) {
   const [open, setOpen] = useState(false);
   const [showHex, setShowHex] = useState(true);
@@ -228,19 +230,15 @@ export function ExportPanel({
       const rawH = video.videoHeight;
       const dur = video.duration;
 
-      // Detect letterbox crop (seek to get a decoded frame first)
-      video.currentTime = Math.min(0.5, dur * 0.05);
-      await new Promise<void>((resolve) => { video.onseeked = () => resolve(); });
-      const crop = detectLetterbox(video);
-      const cropSx = Math.round(crop.left * rawW);
-      const cropSy = Math.round(crop.top * rawH);
-      const vw = rawW - cropSx - Math.round(crop.right * rawW);
-      const vh = rawH - cropSy - Math.round(crop.bottom * rawH);
-      const renderUsesCrop = ratio === "instagram4x5";
-      const renderSx = renderUsesCrop ? cropSx : 0;
-      const renderSy = renderUsesCrop ? cropSy : 0;
-      const renderSw = renderUsesCrop ? vw : rawW;
-      const renderSh = renderUsesCrop ? vh : rawH;
+      // Apply user crop
+      const cropSx = Math.round(userCrop.left * rawW);
+      const cropSy = Math.round(userCrop.top * rawH);
+      const vw = rawW - cropSx - Math.round(userCrop.right * rawW);
+      const vh = rawH - cropSy - Math.round(userCrop.bottom * rawH);
+      const renderSx = cropSx;
+      const renderSy = cropSy;
+      const renderSw = vw;
+      const renderSh = vh;
       const fps = 15; // Analysis sample rate
       const totalFrames = Math.ceil(dur * fps);
 
@@ -272,14 +270,14 @@ export function ExportPanel({
         videoY = Math.round((videoAreaH - drawH) / 2);
         barsY = videoAreaH;
       } else {
-        canvasW = rawW;
-        paletteH = Math.round(rawW / colorCount);
-        canvasH = rawH + paletteH;
-        drawW = rawW;
-        drawH = rawH;
+        canvasW = vw;
+        paletteH = Math.round(vw / colorCount);
+        canvasH = vh + paletteH;
+        drawW = vw;
+        drawH = vh;
         videoX = 0;
         videoY = 0;
-        barsY = rawH;
+        barsY = vh;
       }
 
       // Sampling canvas for color extraction
@@ -314,7 +312,7 @@ export function ExportPanel({
           video.onseeked = () => resolve();
         });
 
-        const raw = await extractColorsFromCanvas(sampleCanvas, video, colorCount, 4000);
+        const raw = await extractColorsFromCanvas(sampleCanvas, video, colorCount, 4000, userCrop);
 
         // Stable matching against previous frame
         if (rawFrames.length > 0) {
@@ -507,7 +505,7 @@ export function ExportPanel({
         video.src = "";
       };
     },
-    [videoSrc, colorCount, colors, formatOptions]
+    [videoSrc, colorCount, colors, userCrop, formatOptions]
   );
 
   const handleCancel = useCallback(() => {

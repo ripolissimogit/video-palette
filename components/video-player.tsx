@@ -5,6 +5,7 @@ import {
   Play,
   Pause,
   RotateCcw,
+  Camera,
   X,
   Volume2,
   VolumeX,
@@ -72,14 +73,46 @@ function CropHandles({
       const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
       const n: CropBounds = { ...s };
 
-      if (drag.type === "top"    || drag.type === "tl" || drag.type === "tr")
-        n.top    = clamp(s.top + dy,    0, 1 - s.bottom - MIN_VISIBLE);
-      if (drag.type === "bottom" || drag.type === "bl" || drag.type === "br")
-        n.bottom = clamp(s.bottom - dy, 0, 1 - s.top    - MIN_VISIBLE);
-      if (drag.type === "left"   || drag.type === "tl" || drag.type === "bl")
-        n.left   = clamp(s.left + dx,   0, 1 - s.right  - MIN_VISIBLE);
-      if (drag.type === "right"  || drag.type === "tr" || drag.type === "br")
-        n.right  = clamp(s.right - dx,  0, 1 - s.left   - MIN_VISIBLE);
+      // Symmetric resize: dragging one side affects the opposite side equally.
+      const affectsHorizontal =
+        drag.type === "left" ||
+        drag.type === "right" ||
+        drag.type === "tl" ||
+        drag.type === "tr" ||
+        drag.type === "bl" ||
+        drag.type === "br";
+
+      if (affectsHorizontal) {
+        const signedDeltaX =
+          drag.type === "left" || drag.type === "tl" || drag.type === "bl"
+            ? dx
+            : -dx;
+        const minDeltaX = Math.max(-s.left, -s.right);
+        const maxDeltaX = (scaleX - MIN_VISIBLE) / 2;
+        const deltaX = clamp(signedDeltaX, minDeltaX, maxDeltaX);
+        n.left = s.left + deltaX;
+        n.right = s.right + deltaX;
+      }
+
+      const affectsVertical =
+        drag.type === "top" ||
+        drag.type === "bottom" ||
+        drag.type === "tl" ||
+        drag.type === "tr" ||
+        drag.type === "bl" ||
+        drag.type === "br";
+
+      if (affectsVertical) {
+        const signedDeltaY =
+          drag.type === "top" || drag.type === "tl" || drag.type === "tr"
+            ? dy
+            : -dy;
+        const minDeltaY = Math.max(-s.top, -s.bottom);
+        const maxDeltaY = (scaleY - MIN_VISIBLE) / 2;
+        const deltaY = clamp(signedDeltaY, minDeltaY, maxDeltaY);
+        n.top = s.top + deltaY;
+        n.bottom = s.bottom + deltaY;
+      }
 
       onCropChange(n);
     },
@@ -388,6 +421,11 @@ export function VideoPlayer({
           e.preventDefault();
           handleRestart();
           break;
+        case "s":
+        case "S":
+          e.preventDefault();
+          handleScreenshot();
+          break;
       }
     };
 
@@ -439,6 +477,40 @@ export function VideoPlayer({
     video.currentTime = 0;
     setCurrentTime(0);
     if (!isPlaying) handlePlay();
+  };
+
+  const handleScreenshot = () => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+
+    drawPreview();
+
+    const safeBase = (fileName || "video-palette")
+      .replace(/[^\w.-]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "video-palette";
+    const minutes = Math.floor(currentTime / 60).toString().padStart(2, "0");
+    const seconds = Math.floor(currentTime % 60).toString().padStart(2, "0");
+    const centis = Math.floor((currentTime % 1) * 100).toString().padStart(2, "0");
+    const downloadName = `${safeBase}-frame-${minutes}-${seconds}-${centis}.png`;
+
+    const triggerDownload = (url: string, revoke = false) => {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadName;
+      a.click();
+      if (revoke) {
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+    };
+
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        triggerDownload(canvas.toDataURL("image/png"));
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      triggerDownload(url, true);
+    }, "image/png");
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -665,6 +737,14 @@ export function VideoPlayer({
               aria-label="Restart (R)"
             >
               <RotateCcw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleScreenshot}
+              className="w-9 h-9 rounded-lg bg-secondary hover:bg-secondary/80 flex items-center justify-center text-foreground transition-colors"
+              aria-label="Screenshot (S)"
+              title="Screenshot (S)"
+            >
+              <Camera className="w-4 h-4" />
             </button>
 
             {/* Volume */}

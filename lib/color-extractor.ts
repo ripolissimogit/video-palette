@@ -315,6 +315,12 @@ export async function extractColorsFromCanvas(
     const validG: Uint8Array   = new Uint8Array(totalPx);
     const validB: Uint8Array   = new Uint8Array(totalPx);
     const validW: Float32Array = new Float32Array(totalPx);
+    // Coarse RGB histogram used to anchor the palette to truly dominant area colors.
+    const HIST_SIZE = 32 * 32 * 32;
+    const histCount = new Uint32Array(HIST_SIZE);
+    const histR = new Uint32Array(HIST_SIZE);
+    const histG = new Uint32Array(HIST_SIZE);
+    const histB = new Uint32Array(HIST_SIZE);
     let nValid = 0;
 
     for (let y = 0; y < H; y++) {
@@ -342,6 +348,11 @@ export async function extractColorsFromCanvas(
         const w = 1.0 + satW * sat + contW * localContrast * 4;
         validR[nValid] = r; validG[nValid] = g; validB[nValid] = b;
         validW[nValid] = w;
+        const bin = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+        histCount[bin] += 1;
+        histR[bin] += r;
+        histG[bin] += g;
+        histB[bin] += b;
         nValid++;
       }
     }
@@ -363,11 +374,20 @@ export async function extractColorsFromCanvas(
       const cdf = new Float32Array(nValid);
       let cumSum = 0;
       for (let i = 0; i < nValid; i++) { cumSum += validW[i]; cdf[i] = cumSum; }
-      for (let s = 0; s < nSamples; s++) {
+      // Mix weighted + uniform sampling so large flat regions are still represented.
+      const weightedSamples = Math.max(1, Math.round(nSamples * 0.65));
+      for (let s = 0; s < weightedSamples; s++) {
         const target = Math.random() * cumSum;
         let lo = 0, hi = nValid - 1;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < target) lo = mid + 1; else hi = mid; }
         labs.push(rgbToLab(validR[lo], validG[lo], validB[lo]));
+      }
+      const remaining = nSamples - weightedSamples;
+      if (remaining > 0) {
+        const step = Math.max(1, Math.floor(nValid / remaining));
+        for (let i = 0; i < nValid && labs.length < nSamples; i += step) {
+          labs.push(rgbToLab(validR[i], validG[i], validB[i]));
+        }
       }
     }
 
@@ -379,10 +399,39 @@ export async function extractColorsFromCanvas(
 
     // Prominent pool: clusters covering ≥ accentMinPop of sampled pixels
     const minPopFrac = settings?.minClusterSize ?? DEFAULT_EXTRACTION_SETTINGS.minClusterSize;
-    const allCandidates = clusters.map((c) => ({ ...c.rgb, pop: c.pop, lab: c.centroid }));
+    type Candidate = {
+      r: number;
+      g: number;
+      b: number;
+      pop: number;
+      lab: [number, number, number];
+    };
+
+    const allCandidates: Candidate[] = clusters.map((c) => ({
+      ...c.rgb,
+      pop: c.pop,
+      lab: c.centroid,
+    }));
     const candidates = totalPop > 0
       ? allCandidates.filter((c) => c.pop / totalPop >= minPopFrac)
       : allCandidates;
+
+    // Dominant area anchor from histogram (area-based, not contrast/saturation-weighted).
+    let dominantCandidate: { r: number; g: number; b: number; pop: number; lab: [number, number, number] } | null = null;
+    let dominantBin = -1;
+    let dominantCount = 0;
+    for (let i = 0; i < histCount.length; i++) {
+      if (histCount[i] > dominantCount) {
+        dominantCount = histCount[i];
+        dominantBin = i;
+      }
+    }
+    if (dominantBin >= 0 && dominantCount > 0) {
+      const r = Math.round(histR[dominantBin] / dominantCount);
+      const g = Math.round(histG[dominantBin] / dominantCount);
+      const b = Math.round(histB[dominantBin] / dominantCount);
+      dominantCandidate = { r, g, b, pop: dominantCount, lab: rgbToLab(r, g, b) };
+    }
 
     // Greedy selection using LAB distance (same space as clustering).
     // Adaptive scaling: larger k → lower threshold so the palette stays fillable.
@@ -391,13 +440,58 @@ export async function extractColorsFromCanvas(
     const MIN_LAB_SQ = minDistAdaptive * minDistAdaptive;
     const colors: RGB[] = [];
     const selectedLabs: Array<[number, number, number]> = [];
+    const totalPopSafe = Math.max(1, totalPop);
+    const EXTREME_DARK_LUMA = 24;
+    const EXTREME_LIGHT_LUMA = 245;
+    const minExtremePopFrac = Math.max(minPopFrac * 1.5, 0.05);
+    let selectedExtremeDark = 0;
+    let selectedExtremeLight = 0;
+
+    const lumaOf = (c: { r: number; g: number; b: number }) =>
+      0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+
+    const trackExtreme = (c: { r: number; g: number; b: number }) => {
+      const luma = lumaOf(c);
+      if (luma <= EXTREME_DARK_LUMA) selectedExtremeDark += 1;
+      if (luma >= EXTREME_LIGHT_LUMA) selectedExtremeLight += 1;
+    };
+
+    const canSelectCandidate = (c: Candidate): boolean => {
+      const luma = lumaOf(c);
+      const popFrac = c.pop / totalPopSafe;
+      const isExtremeDark = luma <= EXTREME_DARK_LUMA;
+      const isExtremeLight = luma >= EXTREME_LIGHT_LUMA;
+
+      // Keep extreme tones only when they are truly present as a significant area.
+      if ((isExtremeDark || isExtremeLight) && popFrac < minExtremePopFrac) {
+        return false;
+      }
+
+      // Avoid multiple near-black/near-white swatches unless they are very dominant.
+      if (isExtremeDark && selectedExtremeDark >= 1 && popFrac < minExtremePopFrac * 1.6) {
+        return false;
+      }
+      if (isExtremeLight && selectedExtremeLight >= 1 && popFrac < minExtremePopFrac * 1.6) {
+        return false;
+      }
+
+      return true;
+    };
+
+    if (dominantCandidate) {
+      colors.push({ r: dominantCandidate.r, g: dominantCandidate.g, b: dominantCandidate.b });
+      selectedLabs.push(dominantCandidate.lab);
+      trackExtreme(dominantCandidate);
+    }
 
     // Pass 1: prominent clusters, full adaptive LAB distance
     for (const c of candidates) {
       if (colors.length >= k) break;
+      if (!canSelectCandidate(c)) continue;
       if (!selectedLabs.some((l) => labDistSq(l, c.lab) < MIN_LAB_SQ)) {
         colors.push({ r: c.r, g: c.g, b: c.b });
         selectedLabs.push(c.lab);
+        trackExtreme(c);
       }
     }
 
@@ -406,9 +500,11 @@ export async function extractColorsFromCanvas(
       const RELAXED_SQ = Math.max(50, Math.round(MIN_LAB_SQ / 4));
       for (const c of allCandidates) {
         if (colors.length >= k) break;
+        if (!canSelectCandidate(c)) continue;
         if (!selectedLabs.some((l) => labDistSq(l, c.lab) < RELAXED_SQ)) {
           colors.push({ r: c.r, g: c.g, b: c.b });
           selectedLabs.push(c.lab);
+          trackExtreme(c);
         }
       }
     }
@@ -417,9 +513,11 @@ export async function extractColorsFromCanvas(
     if (colors.length < k) {
       for (const c of allCandidates) {
         if (colors.length >= k) break;
+        if (!canSelectCandidate(c)) continue;
         if (!selectedLabs.some((l) => labDistSq(l, c.lab) < 9)) {
           colors.push({ r: c.r, g: c.g, b: c.b });
           selectedLabs.push(c.lab);
+          trackExtreme(c);
         }
       }
     }

@@ -57,6 +57,51 @@ function SliderRow({
   );
 }
 
+// --- Presets ---
+
+const PRESETS: { id: string; label: string; settings: ExtractionSettings }[] = [
+  {
+    id: "bilanciato",
+    label: "Bilanciato",
+    settings: DEFAULT_EXTRACTION_SETTINGS,
+  },
+  {
+    id: "cinematico",
+    label: "Cinematico",
+    settings: {
+      deadband: 70,
+      blendFactor: 0.06,
+      minClusterSize: 0.04,
+      minColorDist: 35,
+      saturationWeight: 0.25,
+      contrastWeight: 0.1,
+    },
+  },
+  {
+    id: "vivace",
+    label: "Vivace",
+    settings: {
+      deadband: 25,
+      blendFactor: 0.30,
+      minClusterSize: 0.01,
+      minColorDist: 15,
+      saturationWeight: 2.0,
+      contrastWeight: 0.75,
+    },
+  },
+];
+
+function matchesPreset(a: ExtractionSettings, b: ExtractionSettings): boolean {
+  return (
+    a.deadband        === b.deadband &&
+    a.blendFactor     === b.blendFactor &&
+    a.minClusterSize  === b.minClusterSize &&
+    a.minColorDist    === b.minColorDist &&
+    a.saturationWeight === b.saturationWeight &&
+    a.contrastWeight  === b.contrastWeight
+  );
+}
+
 function ExtractionControls({
   settings,
   onChange,
@@ -127,7 +172,7 @@ function ExtractionControls({
         displayValue={settings.contrastWeight.toFixed(2)}
         onChange={(v) => update("contrastWeight", v)}
       />
-      {!isDefault && (
+      {!isDefault && !sidebar && (
         <button
           onClick={() => onChange(DEFAULT_EXTRACTION_SETTINGS)}
           className="self-start flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -145,6 +190,27 @@ function ExtractionControls({
           <Settings2 className="w-4 h-4 text-muted-foreground" />
           <span className="text-sm font-medium text-foreground">Impostazioni</span>
         </div>
+
+        {/* Preset buttons */}
+        <div className="flex gap-1.5">
+          {PRESETS.map((preset) => {
+            const active = matchesPreset(settings, preset.settings);
+            return (
+              <button
+                key={preset.id}
+                onClick={() => onChange(preset.settings)}
+                className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${
+                  active
+                    ? "bg-foreground text-background font-medium"
+                    : "bg-secondary text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+
         {sliders}
       </div>
     );

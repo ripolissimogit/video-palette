@@ -348,6 +348,9 @@ export function matchColorOrder(prevColors: RGB[], newColors: RGB[]): RGB[] {
 
 // --- Smooth interpolation ---
 const MAX_CHANNEL_DELTA = 35;
+// Changes below this RGB distance are considered compression noise and suppressed.
+// sqrt(225) = 15 units — below the perceptual threshold for palette swatches.
+const DEADBAND_SQ = 225;
 
 function clampDelta(from: number, to: number, t: number): number {
   const raw = Math.round(from + (to - from) * t);
@@ -361,6 +364,9 @@ function clampDelta(from: number, to: number, t: number): number {
 export function lerpColors(from: RGB[], to: RGB[], t: number): RGB[] {
   return to.map((toColor, i) => {
     const fromColor = from[i] || toColor;
+    // Suppress updates within the noise floor — prevents H.264 quantization
+    // artifacts from causing visible flicker on visually static frames.
+    if (rgbDistanceSq(fromColor, toColor) <= DEADBAND_SQ) return fromColor;
     return {
       r: clampDelta(fromColor.r, toColor.r, t),
       g: clampDelta(fromColor.g, toColor.g, t),

@@ -71,7 +71,7 @@ export function VideoPaletteApp() {
       const matched = matchColorOrder(latestColorsRef.current, newColors);
       // 2. Smooth interpolation -- Median Cut is much more stable than K-means
       //    so we can use a higher blend factor for more responsive colors
-      const blendFactor = reducedMotion ? 0.25 : 0.5;
+      const blendFactor = reducedMotion ? 0.15 : 0.3;
       const smoothed = lerpColors(latestColorsRef.current, matched, blendFactor);
       setColors(smoothed);
       latestColorsRef.current = smoothed;

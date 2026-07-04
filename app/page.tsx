@@ -1,5 +1,5 @@
-import { VideoPaletteApp } from "@/components/video-palette-app";
+import { ToolsHome } from "@/components/tools-home";
 
 export default function Page() {
-  return <VideoPaletteApp />;
+  return <ToolsHome />;
 }

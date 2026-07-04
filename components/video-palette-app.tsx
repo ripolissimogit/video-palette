@@ -286,7 +286,15 @@ const DEFAULT_COLORS: RGB[] = [
 
 const DEFAULT_CROP: CropBounds = { top: 0, bottom: 0, left: 0, right: 0 };
 
-export function VideoPaletteApp() {
+interface VideoPaletteAppProps {
+  title?: string;
+  subtitle?: string;
+}
+
+export function VideoPaletteApp({
+  title = "Video Palette",
+  subtitle = "Real-time color extraction",
+}: VideoPaletteAppProps) {
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoName, setVideoName] = useState("");
   const [videoSourceKind, setVideoSourceKind] = useState<VideoSourceKind | null>(null);
@@ -395,10 +403,10 @@ export function VideoPaletteApp() {
             </div>
             <div>
               <h1 className="text-lg font-semibold text-foreground tracking-tight">
-                Video Palette
+                {title}
               </h1>
               <p className="text-xs text-muted-foreground hidden sm:block">
-                Real-time color extraction
+                {subtitle}
               </p>
             </div>
           </div>

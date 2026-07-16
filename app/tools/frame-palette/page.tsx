@@ -1,10 +1,5 @@
-import { VideoPaletteApp } from "@/components/video-palette-app";
+import { redirect } from "next/navigation";
 
 export default function FramePalettePage() {
-  return (
-    <VideoPaletteApp
-      title="Frame Palette"
-      subtitle="Frame, swatches and export-ready previews"
-    />
-  );
+  redirect("https://static.colorificio.app/");
 }

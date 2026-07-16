@@ -65,7 +65,7 @@ export default function OpenGraphImage() {
             Color from media
           </div>
           <div style={{ fontSize: 34, lineHeight: 1.25, color: '#645a50' }}>
-            Film. Frames. Web.
+            Film. Stills. Web.
           </div>
         </div>
         <div
@@ -77,8 +77,8 @@ export default function OpenGraphImage() {
             color: '#4d443b',
           }}
         >
+          <span>Static Palette</span>
           <span>Video Palette</span>
-          <span>Frame Palette</span>
           <span>Plugins</span>
           <span>Extensions</span>
         </div>

@@ -15,13 +15,14 @@ export const metadata: Metadata = {
     template: '%s | Colorificio',
   },
   description:
-    'Elegant color tools for film, frames, browser capture, and publishing workflows.',
+    'Elegant color tools for film, stills, browser capture, and publishing workflows.',
   applicationName: 'Colorificio',
   keywords: [
     'colorificio',
     'color tools',
+    'static palette',
     'video palette',
-    'frame palette',
+    'still image palette',
     'media color',
     'browser palette',
     'wordpress palette',
@@ -38,7 +39,7 @@ export const metadata: Metadata = {
     locale: 'en_US',
     title: 'Colorificio',
     description:
-      'Color from film, frames, and the web.',
+      'Color from film, stills, and the web.',
     siteName: 'Colorificio',
     images: [
       {
@@ -53,7 +54,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'Colorificio',
     description:
-      'Color from film, frames, and the web.',
+      'Color from film, stills, and the web.',
     images: ['/twitter-image'],
   },
   icons: {

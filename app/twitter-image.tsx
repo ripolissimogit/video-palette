@@ -51,7 +51,7 @@ export default function TwitterImage() {
           Color from media
         </div>
         <div style={{ fontSize: 34, color: '#d8cec0', lineHeight: 1.25 }}>
-          Film. Frames. Web.
+          Film. Stills. Web.
         </div>
         <div style={{ display: 'flex', overflow: 'hidden', borderRadius: 12 }}>
           {swatches.map((color) => (

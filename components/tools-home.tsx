@@ -19,6 +19,16 @@ import { ThemeToggle } from "./theme-toggle";
 
 const tools = [
   {
+    title: "Static Palette",
+    line: "Build palettes from stills.",
+    description: "Photos, backdrops, exports.",
+    href: "https://static.colorificio.app/",
+    icon: ImageIcon,
+    accent: "text-[#4f7d52] dark:text-[#9bc58d]",
+    tile: "bg-[#eef6eb] dark:bg-[#172516]",
+    status: "Live",
+  },
+  {
     title: "Video Palette",
     line: "Pull palettes from motion.",
     description: "Video, YouTube, local files.",
@@ -27,16 +37,6 @@ const tools = [
     accent: "text-[#d86b2a] dark:text-[#f1a06f]",
     tile: "bg-[#fff3e9] dark:bg-[#2a1b14]",
     status: "Live",
-  },
-  {
-    title: "Frame Palette",
-    line: "Turn stills into swatches.",
-    description: "Frames, previews, exports.",
-    href: "/tools/frame-palette",
-    icon: ImageIcon,
-    accent: "text-[#4f7d52] dark:text-[#9bc58d]",
-    tile: "bg-[#eef6eb] dark:bg-[#172516]",
-    status: "Demo",
   },
 ];
 
@@ -161,7 +161,7 @@ export function ToolsHome() {
                 Colorificio
               </h1>
               <p className="mt-8 max-w-md text-[20px] leading-8 text-[#645a50] dark:text-[#b9ad9f]">
-                Color from film, frames and the web.
+                Color from film, stills and the web.
               </p>
             </div>
 
@@ -180,7 +180,7 @@ export function ToolsHome() {
             {tools.map((tool) => {
               const Icon = tool.icon;
               return (
-                <Link
+                <a
                   key={tool.title}
                   href={tool.href}
                   className="group flex min-h-[340px] flex-col justify-between rounded-lg border border-[#d8d0c6] bg-[#fffdf8] p-8 shadow-[0_1px_2px_rgba(47,38,30,.04),0_24px_56px_-46px_rgba(47,38,30,.5)] transition-transform duration-200 hover:-translate-y-0.5 hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#675a4e] focus-visible:ring-offset-4 focus-visible:ring-offset-[#f4f0ea] dark:border-[#302820] dark:bg-[#181512] dark:shadow-none dark:hover:bg-[#1d1915] dark:focus-visible:ring-offset-[#13110f]"
@@ -209,7 +209,7 @@ export function ToolsHome() {
                     Open
                     <ArrowUpRight className="h-5 w-5" />
                   </span>
-                </Link>
+                </a>
               );
             })}
           </section>

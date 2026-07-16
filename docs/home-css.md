@@ -8,7 +8,7 @@ the public UI stays terse, while this file explains how to extend it safely.
 
 The home is a compact hub for Colorificio media tools:
 
-- active routes: `Video Palette` and `Frame Palette`
+- active tools: `Static Palette` and `Video Palette`
 - locked demo modules: `Image Lab`, `Audio Keys`, `Poster Cut`
 - mock WordPress plugin list
 - mock Chrome extension list
@@ -21,7 +21,8 @@ submit, persist, or call APIs.
 
 - `/` renders `ToolsHome`
 - `/tools/video-palette` renders `VideoPaletteApp`
-- `/tools/frame-palette` renders `VideoPaletteApp` with frame copy
+- `/tools/frame-palette` redirects to `https://static.colorificio.app/`
+- `https://static.colorificio.app/` serves the still-image palette generator
 
 The home uses hash anchors only for internal sections:
 
@@ -35,7 +36,7 @@ The home uses hash anchors only for internal sections:
 The page is data-driven. Repeated UI is declared near the top of
 `components/tools-home.tsx`:
 
-- `tools`: active cards with route targets
+- `tools`: active cards with route targets, including the external static tool
 - `upcoming`: locked future modules
 - `wordpress`: demo plugin labels
 - `chrome`: demo extension labels
@@ -91,7 +92,7 @@ Desktop first viewport:
 
 ```txt
 left: brand mark, headline, one-line promise, swatches
-right: two active tool cards
+right: static and video tool cards
 below: locked demos, plugin mocks, extension mocks, early access
 ```
 
@@ -108,7 +109,7 @@ Key layout choices:
 The home copy is deliberately short:
 
 - headline: `Colorificio`
-- promise: `Color from film, frames and the web.`
+- promise: `Color from film, stills and the web.`
 - tool cards: one action line plus one compact descriptor
 - demo sections: labels only, no explanatory paragraphs
 

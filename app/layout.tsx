@@ -11,22 +11,24 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] });
 export const metadata: Metadata = {
   metadataBase: new URL('https://colorificio.app'),
   title: {
-    default: 'VAC Video Palette',
-    template: '%s | VAC Video Palette',
+    default: 'Colorificio',
+    template: '%s | Colorificio',
   },
   description:
-    'Analyze video colors in real time, build dynamic palettes, and export high-quality videos with synced audio.',
-  applicationName: 'VAC Video Palette',
+    'Elegant color tools for film, frames, browser capture, and publishing workflows.',
+  applicationName: 'Colorificio',
   keywords: [
+    'colorificio',
+    'color tools',
     'video palette',
+    'frame palette',
+    'media color',
+    'browser palette',
+    'wordpress palette',
     'color extraction',
-    'open graph video tool',
-    'youtube palette',
-    'video color analyzer',
-    'vac',
   ],
-  creator: 'VAC',
-  publisher: 'VAC',
+  creator: 'Colorificio',
+  publisher: 'Colorificio',
   robots: {
     index: true,
     follow: true,
@@ -34,24 +36,24 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    title: 'VAC Video Palette',
+    title: 'Colorificio',
     description:
-      'Analyze video colors in real time and export high-quality palette videos with audio.',
-    siteName: 'VAC Video Palette',
+      'Color from film, frames, and the web.',
+    siteName: 'Colorificio',
     images: [
       {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: 'VAC Video Palette - real-time video color extraction',
+        alt: 'Colorificio - color tools for modern media',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'VAC Video Palette',
+    title: 'Colorificio',
     description:
-      'Real-time video color extraction with high-quality exports.',
+      'Color from film, frames, and the web.',
     images: ['/twitter-image'],
   },
   icons: {

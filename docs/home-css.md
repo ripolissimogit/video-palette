@@ -1,30 +1,29 @@
-# VAC Tools Home CSS Notes
+# Colorificio Home CSS Notes
 
-This document records the structure and styling decisions for the current home
-mockup in `components/tools-home.tsx`.
+This document records the current home styling in
+`components/tools-home.tsx`. It is intentionally more detailed than the page:
+the public UI stays terse, while this file explains how to extend it safely.
 
 ## Scope
 
-The home is a product hub for media-related modules:
+The home is a compact hub for Colorificio media tools:
 
-- two active tool cards: `Video Palette` and `Frame Palette`
-- future media tools: `Image Lab`, `Audio Keys`, `Poster Cut`
-- demo WordPress plugin cards
-- demo Chrome extension cards
-- static demo registration form
+- active routes: `Video Palette` and `Frame Palette`
+- locked demo modules: `Image Lab`, `Audio Keys`, `Poster Cut`
+- mock WordPress plugin list
+- mock Chrome extension list
+- static early-access form
 
-The WordPress plugins, Chrome extensions, and registration form are non-operational
-mockups. They define the product surface before API, authentication, install
-packages, and persistence are added.
+Plugin, extension, and registration areas are still demos. They do not install,
+submit, persist, or call APIs.
 
 ## Route Map
 
 - `/` renders `ToolsHome`
 - `/tools/video-palette` renders `VideoPaletteApp`
-- `/tools/frame-palette` renders `VideoPaletteApp` with a frame-specific title
-  and subtitle
+- `/tools/frame-palette` renders `VideoPaletteApp` with frame copy
 
-The home uses hash anchors for internal navigation:
+The home uses hash anchors only for internal sections:
 
 - `#tools`
 - `#wordpress`
@@ -33,189 +32,129 @@ The home uses hash anchors for internal navigation:
 
 ## Implementation Model
 
-The page is intentionally data-driven. The repeated visual groups are declared
-as arrays near the top of `components/tools-home.tsx`:
+The page is data-driven. Repeated UI is declared near the top of
+`components/tools-home.tsx`:
 
-- `tools`: active first-class tools with real route targets
-- `upcomingTools`: locked media modules
-- `infoCards`: explanatory cards
-- `wordpressPlugins`: WordPress plugin mockups
-- `chromeExtensions`: Chrome extension mockups
+- `tools`: active cards with route targets
+- `upcoming`: locked future modules
+- `wordpress`: demo plugin labels
+- `chrome`: demo extension labels
+- `swatches`: brand color strip
 
-To add another card of the same type, add an object to the relevant array and
-reuse the existing fields: `title`, `description`, `href` when applicable,
-`icon`, `accent`, and `iconBg`.
+Add future items through these arrays before changing the layout. Keep demo and
+live states visually distinct.
 
 ## CSS Strategy
 
-The component uses Tailwind utility classes directly rather than a separate CSS
-module. This keeps the small hub page self-contained and makes each section easy
-to scan without chasing custom selectors.
-
-The only inline `<style>` block is page-level containment:
+Styling uses Tailwind utility classes in the component. The only inline style
+block scopes the page background and color-scheme to the home:
 
 ```css
 html:has(.tools-home-shell),
 body:has(.tools-home-shell) {
-  background: #f0eeec;
+  background: #f4f0ea;
   color-scheme: light;
+}
+
+html.dark:has(.tools-home-shell),
+html.dark body:has(.tools-home-shell) {
+  background: #13110f;
+  color-scheme: dark;
 }
 ```
 
-That rule prevents the global dark body background from leaking around full-page
-captures and browser screenshots. Keep it in place unless the global app theme
-is changed to support this page natively.
+This keeps screenshots and full-height captures clean in both modes. The real
+theme switch is the shared `ThemeToggle`, backed by `next-themes`.
 
 ## Visual Tokens
 
-The palette is adapted from the Fila7-style warm, quiet product surface:
+| Token | Light | Dark | Usage |
+| --- | --- | --- | --- |
+| Page background | `#f4f0ea` | `#13110f` | Main shell |
+| Header surface | `#fbf8f2` | `#15120f` | Sticky top area |
+| Card surface | `#fffdf8` | `#181512` | Tools and form |
+| Secondary surface | `#f4eee4` | `#211c18` | Icon tiles |
+| Primary text | `#241f1a` | `#f4eee5` | Headings |
+| Body text | `#4d443b` | `#ded4c7` | Labels and card text |
+| Muted text | `#807568` | `#a79b8f` | Badges and helper text |
+| Border | `#d8d0c6` | `#302820` | Cards and inputs |
+| Primary action | `#453a31` | `#f4eee5` | Buttons |
+| Video accent | `#d86b2a` | `#f1a06f` | Video card |
+| Frame accent | `#4f7d52` | `#9bc58d` | Frame card |
 
-| Token | Value | Usage |
-| --- | --- | --- |
-| Page background | `#f0eeec` | Main shell background |
-| Header wash | `#f8f7f5` | Header and secondary surfaces |
-| Card surface | `#fdfcfa` | Active cards and form panel |
-| Primary text | `#251f1b` | Headings, brand, main labels |
-| Body text | `#665f57` | Descriptions and supporting copy |
-| Muted text | `#7b746d`, `#8a837c`, `#9a928a` | Captions, locked states, badges |
-| Border | `#d7d2cc`, `#ded8d1`, `#e2ddd7` | Cards, fields, section dividers |
-| Primary button | `#4b4138` | Main `Open tool` and demo register button |
-| Button hover | `#332b25` | Primary button hover |
-| Focus ring | `#5b524a` | Keyboard focus on tool cards |
-| Success accent | `#4f8739`, `#48a34a` | Frame card and demo status |
-| Video accent | `#e46f17` | Video Palette card |
-| Extension accent | `#4c78a8` | Chrome extension cards |
-
-Avoid adding a dominant new hue unless it represents a new product category.
-New categories should introduce small accent colors in icons or badges, while
-the page background, text, borders, and surfaces remain stable.
+The palette should stay warm and quiet, with accents used sparingly. Do not turn
+the page into a single-hue theme; the swatch strip is the controlled color range.
 
 ## Layout
 
-The first viewport is a two-column product hub on desktop:
+Desktop first viewport:
 
 ```txt
-left:  hero copy and short product note
-right: active tool cards
-below: info cards, upcoming tools, plugin mocks, extension mocks, registration
+left: brand mark, headline, one-line promise, swatches
+right: two active tool cards
+below: locked demos, plugin mocks, extension mocks, early access
 ```
 
-Key container classes:
+Key layout choices:
 
-- `max-w-7xl`: central content width
-- `px-5 sm:px-8`: mobile and desktop gutters
-- `lg:grid-cols-[minmax(0,0.82fr)_minmax(560px,1.18fr)]`: first viewport
-  balance between editorial copy and tool cards
-- `md:grid-cols-2`, `md:grid-cols-3`, `lg:grid-cols-3`: progressive card grids
+- `max-w-6xl` keeps the page airy without stretching cards too wide.
+- `px-5 sm:px-8` sets stable gutters.
+- `lg:grid-cols-[minmax(0,0.9fr)_minmax(480px,1.1fr)]` balances hero and tools.
+- `rounded-lg` is the maximum radius for major panels.
+- Cards are not nested inside other cards.
 
-Cards use `rounded-lg`, but the visual radius stays modest. Do not nest cards
-inside cards; framed panels are used only for repeated items and the registration
-mockup.
+## Typography And Copy
 
-## Typography
+The home copy is deliberately short:
 
-The page uses the app font stack inherited from the Next/Tailwind setup.
+- headline: `Colorificio`
+- promise: `Color from film, frames and the web.`
+- tool cards: one action line plus one compact descriptor
+- demo sections: labels only, no explanatory paragraphs
 
-Important sizes:
+Hero type uses fixed sizes, never viewport-based scaling. Letter spacing remains
+normal to avoid cramped rendering at small widths.
 
-- hero headline: `text-[42px] sm:text-[58px] lg:text-[62px]`
-- primary card title: `text-[31px]`
-- section heading: `text-[30px]`
-- info card heading: `text-[18px]`
-- body copy: `text-[15px]` to `text-[20px]` depending on hierarchy
-- labels and badges: `text-[12px]` to `text-[14px]`
-
-Letter spacing remains normal. Do not introduce negative tracking; it makes the
-compact product UI less predictable across breakpoints.
-
-## Components And States
+## States
 
 ### Header
 
-The header has:
+The header contains the brand link, desktop anchors, preview badge, and shared
+light/dark toggle. Navigation hides on smaller screens to preserve space.
 
-- brand link back to `/`
-- desktop-only anchor navigation
-- `Demo mode` status badge
-- static theme-preview icon button
+### Tool Cards
 
-The theme button does not toggle state yet. If a real theme switch is added,
-wire it to the existing app theme system instead of local component state.
+Active cards are links. They include an icon tile, status badge, concise copy,
+and a button-like `Open` affordance. Hover and focus states are visible in both
+themes.
 
-### Active Tool Cards
+### Demo Lists
 
-Active cards are links with:
+WordPress and Chrome sections are informational mockups. Lock icons communicate
+that the items are not operational yet.
 
-- icon tile
-- status badge
-- title and description
-- primary `Open tool` button-like affordance
-- hover translate and shadow
-- keyboard focus ring
+### Registration
 
-Only active cards should use solid borders and the dark primary action.
+The early-access form is static:
 
-### Upcoming And Locked Cards
-
-Future tools and extension mockups use dashed or muted borders plus lock icons.
-This communicates planned functionality without implying that the item is
-clickable or installable.
-
-### WordPress Plugin Mockups
-
-WordPress plugin cards are ordinary informational cards. They currently have no
-links, no install buttons, and no package metadata. When made operational, add a
-separate field for install URL or package state rather than overloading
-`description`.
-
-### Chrome Extension Mockups
-
-Chrome extension cards are preview-only. They use dashed borders and lock icons.
-When made operational, add install/update/signing states explicitly:
-
-- `Draft`
-- `Packed`
-- `Uploaded`
-- `In review`
-- `Published`
-
-### Registration Form
-
-The form is deliberately static:
-
-- button type is `button`
+- `button` type is `button`
 - no `action`
 - no server action
 - no API call
 - no local persistence
 
-When registration becomes real, add validation and a backend path in the same
-change. Do not silently turn the current demo button into a submit button without
-adding visible success/error states.
+When registration becomes real, add validation, success/error states, and a
+backend endpoint in the same change.
 
-## Responsive Behavior
+## Verification Checklist
 
-The nav hides below `md` to preserve mobile width. The content collapses to one
-column on small screens. Card grids progressively move from one column to two
-or three columns using Tailwind breakpoints.
+After meaningful home changes run:
 
-Manual browser checks covered:
-
-- 1440x900 desktop viewport
-- 390x844 mobile viewport
-- zero horizontal overflow
-- no console warnings or errors
-- internal anchor navigation
-- active tool link navigation
-- demo form input behavior
-
-## Maintenance Notes
-
-Keep future edits small and data-driven:
-
-1. Add new modules to the arrays before changing layout.
-2. Keep operational and mockup states visually distinct.
-3. Keep all user-facing home copy in English unless localization is introduced.
-4. Run `npm run lint`, `npm run typecheck -- --incremental false`, and
-   `npm run build` after meaningful changes.
-5. For UI changes, verify in browser on desktop and mobile, not only via build.
+1. `npm run lint`
+2. `npm run typecheck -- --incremental false`
+3. `npm run build`
+4. Browser smoke on `/`
+5. Light and dark mode toggle check
+6. Desktop and mobile viewport screenshot review
+7. Horizontal overflow check
+8. Console warning/error check

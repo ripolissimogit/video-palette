@@ -8,6 +8,8 @@ export const size = {
 export const contentType = 'image/png'
 
 export default function TwitterImage() {
+  const swatches = ['#221c18', '#d86b2a', '#d8ad5f', '#4f7d52', '#537a9f', '#f8f3ea']
+
   return new ImageResponse(
     (
       <div
@@ -17,32 +19,44 @@ export default function TwitterImage() {
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
-          gap: 20,
+          gap: 28,
           padding: 60,
           background:
-            'radial-gradient(circle at 20% 20%, #1d4ed8 0%, #0f172a 56%, #020617 100%)',
-          color: '#f8fafc',
+            'linear-gradient(135deg, #17130f 0%, #241f1a 56%, #3a2c20 100%)',
+          color: '#f4eee5',
           fontFamily:
             'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
         }}
       >
-        <div style={{ fontSize: 34, color: '#93c5fd', fontWeight: 700 }}>
-          VAC
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div
+            style={{
+              width: 58,
+              height: 58,
+              borderRadius: 14,
+              border: '2px solid #54483d',
+              background: '#211c18',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 28,
+              fontWeight: 700,
+            }}
+          >
+            C
+          </div>
+          <div style={{ fontSize: 34, fontWeight: 700 }}>Colorificio</div>
         </div>
-        <div style={{ fontSize: 86, fontWeight: 800, lineHeight: 1 }}>
-          Video Palette
+        <div style={{ fontSize: 86, fontWeight: 760, lineHeight: 0.96 }}>
+          Color from media
         </div>
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            fontSize: 33,
-            color: '#cbd5e1',
-            lineHeight: 1.3,
-          }}
-        >
-          <span>Extract colors from videos in real time.</span>
-          <span>Export in MP4, MOV, and WebM.</span>
+        <div style={{ fontSize: 34, color: '#d8cec0', lineHeight: 1.25 }}>
+          Film. Frames. Web.
+        </div>
+        <div style={{ display: 'flex', overflow: 'hidden', borderRadius: 12 }}>
+          {swatches.map((color) => (
+            <div key={color} style={{ width: 54, height: 44, background: color }} />
+          ))}
         </div>
       </div>
     ),

@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ensureMergedVideo,
   extractVideoId,
+  getYouTubeFallbackVideoInfo,
   getYouTubeVideoInfo,
+  isYouTubeServerAccessBlocked,
   isValidVideoId,
   streamLocalMp4,
 } from "@/lib/server/youtube-utils";
@@ -99,14 +101,9 @@ export async function GET(request: NextRequest) {
     const message = error instanceof Error ? error.message : "Unknown error";
 
     // Check for common yt-dlp errors
-    if (message.includes("Sign in to confirm") || message.includes("not a bot")) {
-      return NextResponse.json(
-        {
-          error:
-            "YouTube is blocking server-side access for this video. Try a different video or direct file.",
-        },
-        { status: 403 }
-      );
+    if (isYouTubeServerAccessBlocked(message)) {
+      const fallbackInfo = await getYouTubeFallbackVideoInfo(videoId);
+      return NextResponse.json(fallbackInfo);
     }
     if (message.includes("Private video") || message.includes("not available")) {
       return NextResponse.json(

@@ -44,6 +44,7 @@ export interface YouTubeVideoInfo {
   height: number;
   streamUrl: string | null;
   hasAudio: boolean;
+  fallbackMode?: "thumbnail";
 }
 
 function ensureDir(path: string) {
@@ -154,6 +155,18 @@ function shouldTryNextExtractor(errorText: string): boolean {
     "precondition check failed",
     "requested format is not available",
     "nsig extraction failed",
+  ].some((needle) => lower.includes(needle));
+}
+
+export function isYouTubeServerAccessBlocked(errorText: string): boolean {
+  const lower = errorText.toLowerCase();
+
+  return [
+    "sign in to confirm",
+    "not a bot",
+    "http error 403",
+    "no title found in player responses",
+    "precondition check failed",
   ].some((needle) => lower.includes(needle));
 }
 
@@ -356,6 +369,78 @@ export async function ensureYtDlp(): Promise<string> {
   return YTDLP_PATH;
 }
 
+async function fetchYouTubeThumbnail(videoId: string): Promise<Buffer> {
+  const thumbnailUrls = [
+    `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+    `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`,
+    `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+  ];
+
+  for (const url of thumbnailUrls) {
+    const res = await fetch(url);
+    const contentType = res.headers.get("content-type") || "";
+    if (!res.ok || !contentType.startsWith("image/")) continue;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.byteLength > 0) return buffer;
+  }
+
+  throw new Error("Could not fetch YouTube thumbnail fallback");
+}
+
+async function createThumbnailFallbackVideo(
+  videoId: string,
+  mergedPath: string
+): Promise<string> {
+  ensureFfmpegTools();
+  ensureDir(YT_CACHE_DIR);
+
+  const thumbnailPath = `${YT_CACHE_DIR}/${videoId}.jpg`;
+  const thumbnail = await fetchYouTubeThumbnail(videoId);
+  writeFileSync(thumbnailPath, thumbnail);
+
+  if (existsSync(mergedPath)) {
+    unlinkSync(mergedPath);
+  }
+
+  const cmd = [
+    shellQuote(FFMPEG_PATH),
+    "-y",
+    "-loop",
+    "1",
+    "-i",
+    shellQuote(thumbnailPath),
+    "-f",
+    "lavfi",
+    "-i",
+    shellQuote("anullsrc=channel_layout=stereo:sample_rate=44100"),
+    "-t",
+    "2",
+    "-vf",
+    shellQuote("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    "-movflags",
+    "+faststart",
+    shellQuote(mergedPath),
+  ].join(" ");
+
+  console.warn(`[youtube] Creating thumbnail fallback MP4 for ${videoId}`);
+  execSync(cmd, {
+    encoding: "utf-8",
+    timeout: 30_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  validateMergedFileWithFfprobe(mergedPath);
+  return mergedPath;
+}
+
 export async function ensureMergedVideo(videoId: string): Promise<string> {
   ensureDir(YT_CACHE_DIR);
   cleanupOldCachedVideos();
@@ -373,34 +458,46 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
   // Do not force mp4-only sources here: many YouTube 2160p streams are vp9/webm.
   // yt-dlp + ffmpeg will still output a merged mp4 when possible.
   const formatStr = "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best";
-  execYtDlpWithExtractorRetries(
-    ytdlp,
-    `download and merge ${videoId}`,
-    (extractorArgs) => [
-      "--no-playlist",
-      "--no-progress",
-      "--no-warnings",
-      ...buildYtDlpOptionalArgs(extractorArgs),
-      "--ffmpeg-location",
-      FFMPEG_PATH,
-      "-f",
-      formatStr,
-      "--merge-output-format",
-      "mp4",
-      "--output",
-      mergedPath,
-      sourceUrl,
-    ],
-    {
-      timeout: 4 * 60_000,
-      maxBuffer: 10 * 1024 * 1024,
-    },
-    () => {
-      if (existsSync(mergedPath)) {
-        unlinkSync(mergedPath);
+  try {
+    execYtDlpWithExtractorRetries(
+      ytdlp,
+      `download and merge ${videoId}`,
+      (extractorArgs) => [
+        "--no-playlist",
+        "--no-progress",
+        "--no-warnings",
+        ...buildYtDlpOptionalArgs(extractorArgs),
+        "--ffmpeg-location",
+        FFMPEG_PATH,
+        "-f",
+        formatStr,
+        "--merge-output-format",
+        "mp4",
+        "--output",
+        mergedPath,
+        sourceUrl,
+      ],
+      {
+        timeout: 4 * 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      () => {
+        if (existsSync(mergedPath)) {
+          unlinkSync(mergedPath);
+        }
       }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : getErrorText(error);
+    if (!isYouTubeServerAccessBlocked(message)) {
+      throw error;
     }
-  );
+
+    console.warn(
+      `[youtube] yt-dlp blocked for ${videoId}; using thumbnail fallback`
+    );
+    return createThumbnailFallbackVideo(videoId, mergedPath);
+  }
 
   if (!existsSync(mergedPath) || statSync(mergedPath).size <= 0) {
     throw new Error("Merged video file was not created");
@@ -410,6 +507,38 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
 
   enforceCacheSizeLimit(mergedPath);
   return mergedPath;
+}
+
+export async function getYouTubeFallbackVideoInfo(
+  videoId: string
+): Promise<YouTubeVideoInfo> {
+  let title = `YouTube ${videoId}`;
+
+  try {
+    const oembedUrl =
+      `https://www.youtube.com/oembed?format=json&url=` +
+      encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`);
+    const res = await fetch(oembedUrl, { signal: AbortSignal.timeout(8_000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (typeof data?.title === "string" && data.title.trim()) {
+        title = `${data.title.trim()} (thumbnail preview)`;
+      }
+    }
+  } catch {
+    // Keep the deterministic fallback title.
+  }
+
+  return {
+    videoId,
+    title,
+    duration: 2,
+    streamUrl: null,
+    width: 0,
+    height: 0,
+    hasAudio: true,
+    fallbackMode: "thumbnail",
+  };
 }
 
 export function streamLocalMp4(filePath: string): NextResponse {

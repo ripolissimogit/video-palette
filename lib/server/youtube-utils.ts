@@ -441,6 +441,23 @@ async function createThumbnailFallbackVideo(
   return mergedPath;
 }
 
+export async function ensureYouTubeThumbnailFallbackVideo(
+  videoId: string
+): Promise<string> {
+  ensureDir(YT_CACHE_DIR);
+  cleanupOldCachedVideos();
+  enforceCacheSizeLimit();
+
+  const mergedPath = getMergedVideoPath(videoId);
+  if (isFreshCacheFile(mergedPath)) {
+    return mergedPath;
+  }
+
+  const filePath = await createThumbnailFallbackVideo(videoId, mergedPath);
+  enforceCacheSizeLimit(filePath);
+  return filePath;
+}
+
 export async function ensureMergedVideo(videoId: string): Promise<string> {
   ensureDir(YT_CACHE_DIR);
   cleanupOldCachedVideos();
@@ -496,7 +513,7 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
     console.warn(
       `[youtube] yt-dlp blocked for ${videoId}; using thumbnail fallback`
     );
-    return createThumbnailFallbackVideo(videoId, mergedPath);
+    return ensureYouTubeThumbnailFallbackVideo(videoId);
   }
 
   if (!existsSync(mergedPath) || statSync(mergedPath).size <= 0) {

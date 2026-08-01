@@ -226,11 +226,30 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       body: JSON.stringify({
         videoId: infoData.videoId,
         streamUrl: infoData.streamUrl,
+        fallbackMode: infoData.fallbackMode,
       }),
     });
     const jobData = await jobRes.json().catch(() => null);
     if (!jobRes.ok || !jobData?.jobId) {
       throw new Error(jobData?.error || `Failed to start merge job (${jobRes.status})`);
+    }
+
+    if (jobData.status === "ready" && jobData.streamUrl) {
+      const { streamRes, sourceKind } = await fetchFinalYouTubeStream(
+        jobData.streamUrl,
+        infoData.streamUrl || null
+      );
+      const blob = await streamRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const effectiveSourceKind =
+        infoData.fallbackMode === "thumbnail" ? "youtube-fallback" : sourceKind;
+      onVideoSelect(
+        blobUrl,
+        infoData.title || `youtube-${infoData.videoId}`,
+        { sourceKind: effectiveSourceKind }
+      );
+      clearPendingJob();
+      return;
     }
 
     const pending: PendingYouTubeJob = {
@@ -243,7 +262,13 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
     };
     savePendingJob(pending);
     await completeYouTubeJob(pending);
-  }, [completeYouTubeJob, savePendingJob]);
+  }, [
+    clearPendingJob,
+    completeYouTubeJob,
+    fetchFinalYouTubeStream,
+    onVideoSelect,
+    savePendingJob,
+  ]);
 
   useEffect(() => {
     if (resumeStartedRef.current) return;

@@ -70,7 +70,7 @@ function readTrimmedEnv(name: string): string | null {
 
 function buildYtDlpRuntimeArgs(): string[] {
   const configuredRuntime = readTrimmedEnv("YTDLP_JS_RUNTIME");
-  const runtime = configuredRuntime || `nodejs:${process.execPath}`;
+  const runtime = configuredRuntime || `node:${process.execPath}`;
 
   return runtime ? ["--js-runtimes", runtime] : [];
 }

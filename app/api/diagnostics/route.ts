@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { execSync } from "child_process";
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { ensureYtDlp, getYouTubeVideoInfo } from "@/lib/server/youtube-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -64,8 +65,8 @@ export async function GET() {
   checks.youtube_cache_dir = checkWritable("/tmp/youtube-cache");
   checks.jobs_store_dir    = checkWritable("/tmp/youtube-merge-jobs");
 
-  // --- yt-dlp: prefer system (nixpacks), fall back to /tmp download ---
-  checks.ytdlp_system = run("which yt-dlp");
+  // --- yt-dlp: prefer system when present, otherwise use the app resolver. ---
+  checks.ytdlp_system = run("command -v yt-dlp");
   checks.ytdlp_system_version = run("yt-dlp --version");
 
   const ytdlpPath = "/tmp/ytdlp-bin/yt-dlp";
@@ -74,25 +75,47 @@ export async function GET() {
     output: existsSync(ytdlpPath) ? "present" : "not found",
   };
 
-  const ytdlpActive = checks.ytdlp_system_version.ok ? "yt-dlp" : ytdlpPath;
-  if (checks.ytdlp_system_version.ok || existsSync(ytdlpPath)) {
-    checks.ytdlp_version = checks.ytdlp_system_version.ok
-      ? checks.ytdlp_system_version
-      : run(`"${ytdlpPath}" --version`);
-
-    // Connectivity test: fetch title + duration of a short public video.
-    const ytTestResult = run(
-      `"${ytdlpActive}" --no-playlist --no-warnings --no-progress ` +
-        `--ffmpeg-location "${FFMPEG_PATH}" ` +
-        `--print "%(title)s | %(duration)ss" ` +
-        `-f "best[ext=mp4][vcodec!=none][acodec!=none]/best" ` +
-        `"https://www.youtube.com/watch?v=jNQXAC9IVRw"`,
-      { timeout: 30_000 }
-    );
-    checks.ytdlp_yt_connectivity = ytTestResult;
+  let ytdlpActive: string | null = null;
+  try {
+    ytdlpActive = await ensureYtDlp();
+    checks.ytdlp_resolved = {
+      ok: true,
+      output: ytdlpActive === "yt-dlp" ? "system yt-dlp" : ytdlpActive,
+    };
+    const versionCmd = ytdlpActive === "yt-dlp" ? "yt-dlp" : `"${ytdlpActive}"`;
+    checks.ytdlp_version = run(`${versionCmd} --version`);
+  } catch (e: unknown) {
+    const err = e as { message?: string };
+    checks.ytdlp_resolved = {
+      ok: false,
+      output: err.message?.slice(0, 400) || "failed to resolve yt-dlp",
+    };
   }
 
-  const allOk = Object.values(checks).every((c) => c.ok);
+  if (ytdlpActive) {
+    try {
+      const info = await getYouTubeVideoInfo("jNQXAC9IVRw");
+      checks.ytdlp_yt_connectivity = {
+        ok: true,
+        output: `${info.title} | ${info.duration}s | stream=${Boolean(info.streamUrl)}`,
+      };
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      checks.ytdlp_yt_connectivity = {
+        ok: false,
+        output: err.message?.slice(0, 400) || "YouTube probe failed",
+      };
+    }
+  }
+
+  const optionalChecks = new Set([
+    "ytdlp_system",
+    "ytdlp_system_version",
+    "ytdlp_tmp_exists",
+  ]);
+  const allOk = Object.entries(checks)
+    .filter(([key]) => !optionalChecks.has(key))
+    .every(([, check]) => check.ok);
 
   return NextResponse.json({
     ok: allOk,

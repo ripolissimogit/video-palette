@@ -27,6 +27,14 @@ const YT_CACHE_MAX_BYTES = readPositiveInt(
   process.env.YT_CACHE_MAX_BYTES,
   2 * 1024 * 1024 * 1024
 );
+const DEFAULT_YOUTUBE_EXTRACTOR_ARGS = [
+  null,
+  "youtube:player_client=ios",
+  "youtube:player_client=mweb",
+  "youtube:player_client=android",
+  "youtube:player_client=tv",
+  "youtube:player_client=tv_embedded",
+];
 
 export interface YouTubeVideoInfo {
   videoId: string;
@@ -60,7 +68,7 @@ function readTrimmedEnv(name: string): string | null {
   return raw ? raw : null;
 }
 
-function buildYtDlpOptionalArgs(): string[] {
+function buildYtDlpOptionalArgs(extractorArgs: string | null): string[] {
   const args: string[] = [];
 
   const cookiesFile = readTrimmedEnv("YTDLP_COOKIES_FILE");
@@ -77,7 +85,6 @@ function buildYtDlpOptionalArgs(): string[] {
     args.push("--cookies-from-browser", cookiesFromBrowser);
   }
 
-  const extractorArgs = readTrimmedEnv("YTDLP_EXTRACTOR_ARGS");
   if (extractorArgs) {
     args.push("--extractor-args", extractorArgs);
   }
@@ -87,6 +94,111 @@ function buildYtDlpOptionalArgs(): string[] {
 
 function buildYtDlpCommand(binary: string, args: string[]): string {
   return [shellQuote(binary), ...args.map(shellQuote)].join(" ");
+}
+
+function getExtractorArgStrategies(): Array<string | null> {
+  const configured = readTrimmedEnv("YTDLP_EXTRACTOR_ARGS");
+  const strategies: Array<string | null> = configured ? [configured] : [null];
+
+  for (const strategy of DEFAULT_YOUTUBE_EXTRACTOR_ARGS) {
+    if (!strategies.includes(strategy)) {
+      strategies.push(strategy);
+    }
+  }
+
+  return strategies;
+}
+
+function extractorLabel(extractorArgs: string | null): string {
+  return extractorArgs || "default";
+}
+
+function getErrorText(error: unknown): string {
+  const err = error as {
+    message?: string;
+    stderr?: string | Buffer;
+    stdout?: string | Buffer;
+  };
+  const parts = [err.stderr, err.stdout, err.message]
+    .map((part) => {
+      if (!part) return "";
+      return Buffer.isBuffer(part) ? part.toString() : String(part);
+    })
+    .filter(Boolean);
+
+  return parts.join("\n").trim();
+}
+
+function shouldTryNextExtractor(errorText: string): boolean {
+  const lower = errorText.toLowerCase();
+
+  if (
+    lower.includes("private video") ||
+    lower.includes("copyright") ||
+    lower.includes("this video is not available")
+  ) {
+    return false;
+  }
+
+  return [
+    "sign in to confirm",
+    "not a bot",
+    "http error 403",
+    "precondition check failed",
+    "requested format is not available",
+    "nsig extraction failed",
+  ].some((needle) => lower.includes(needle));
+}
+
+function summarizeYtDlpError(errorText: string): string {
+  const firstLine = errorText
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  return (firstLine || "unknown yt-dlp error").slice(0, 240);
+}
+
+function execYtDlpWithExtractorRetries(
+  binary: string,
+  context: string,
+  makeArgs: (extractorArgs: string | null) => string[],
+  options: {
+    timeout: number;
+    maxBuffer: number;
+  },
+  beforeAttempt?: () => void
+): string {
+  const failures: string[] = [];
+  let lastErrorText = "";
+
+  for (const extractorArgs of getExtractorArgStrategies()) {
+    beforeAttempt?.();
+    const label = extractorLabel(extractorArgs);
+    const cmd = buildYtDlpCommand(binary, makeArgs(extractorArgs));
+
+    try {
+      console.log(`[youtube] ${context} using yt-dlp strategy: ${label}`);
+      return execSync(cmd, {
+        encoding: "utf-8",
+        timeout: options.timeout,
+        maxBuffer: options.maxBuffer,
+      });
+    } catch (error) {
+      lastErrorText = getErrorText(error);
+      failures.push(`${label}: ${summarizeYtDlpError(lastErrorText)}`);
+
+      if (!shouldTryNextExtractor(lastErrorText)) {
+        break;
+      }
+    }
+  }
+
+  throw new Error(
+    `${context} failed after ${failures.length} yt-dlp strategy attempt(s): ` +
+      failures.join(" | ") +
+      (lastErrorText ? `\n${lastErrorText}` : "")
+  );
 }
 
 export function isValidVideoId(videoId: string): boolean {
@@ -250,36 +362,38 @@ export async function ensureMergedVideo(videoId: string): Promise<string> {
   const ytdlp = await ensureYtDlp();
   ensureFfmpegTools();
 
-  if (existsSync(mergedPath)) {
-    unlinkSync(mergedPath);
-  }
-
   const sourceUrl = `https://www.youtube.com/watch?v=${videoId}`;
   // Do not force mp4-only sources here: many YouTube 2160p streams are vp9/webm.
   // yt-dlp + ffmpeg will still output a merged mp4 when possible.
   const formatStr = "bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best";
-  const cmd = buildYtDlpCommand(ytdlp, [
-    "--no-playlist",
-    "--no-progress",
-    "--no-warnings",
-    ...buildYtDlpOptionalArgs(),
-    "--ffmpeg-location",
-    FFMPEG_PATH,
-    "-f",
-    formatStr,
-    "--merge-output-format",
-    "mp4",
-    "--output",
-    mergedPath,
-    sourceUrl,
-  ]);
-
-  console.log("[youtube] Downloading and merging with ffmpeg:", videoId);
-  execSync(cmd, {
-    encoding: "utf-8",
-    timeout: 4 * 60_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  execYtDlpWithExtractorRetries(
+    ytdlp,
+    `download and merge ${videoId}`,
+    (extractorArgs) => [
+      "--no-playlist",
+      "--no-progress",
+      "--no-warnings",
+      ...buildYtDlpOptionalArgs(extractorArgs),
+      "--ffmpeg-location",
+      FFMPEG_PATH,
+      "-f",
+      formatStr,
+      "--merge-output-format",
+      "mp4",
+      "--output",
+      mergedPath,
+      sourceUrl,
+    ],
+    {
+      timeout: 4 * 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+    () => {
+      if (existsSync(mergedPath)) {
+        unlinkSync(mergedPath);
+      }
+    }
+  );
 
   if (!existsSync(mergedPath) || statSync(mergedPath).size <= 0) {
     throw new Error("Merged video file was not created");
@@ -327,22 +441,22 @@ export async function getYouTubeVideoInfo(
   const formatStr =
     "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/b[ext=mp4][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]";
 
-  const cmd = buildYtDlpCommand(ytdlp, [
-    "-j",
-    "--no-download",
-    ...buildYtDlpOptionalArgs(),
-    "-f",
-    formatStr,
-    `https://www.youtube.com/watch?v=${videoId}`,
-  ]);
-
-  console.log("[youtube] Running yt-dlp for video:", videoId);
-
-  const output = execSync(cmd, {
-    encoding: "utf-8",
-    timeout: 30_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const output = execYtDlpWithExtractorRetries(
+    ytdlp,
+    `load metadata ${videoId}`,
+    (extractorArgs) => [
+      "-j",
+      "--no-download",
+      ...buildYtDlpOptionalArgs(extractorArgs),
+      "-f",
+      formatStr,
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ],
+    {
+      timeout: 30_000,
+      maxBuffer: 10 * 1024 * 1024,
+    }
+  );
 
   const data = JSON.parse(output);
 

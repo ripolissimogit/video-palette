@@ -99,11 +99,11 @@ export async function GET(request: NextRequest) {
     const message = error instanceof Error ? error.message : "Unknown error";
 
     // Check for common yt-dlp errors
-    if (message.includes("Sign in to confirm")) {
+    if (message.includes("Sign in to confirm") || message.includes("not a bot")) {
       return NextResponse.json(
         {
           error:
-            "YouTube is requiring sign-in for this video. Try a different video or direct URL.",
+            "YouTube is blocking server-side access for this video. Try a different video or direct file.",
         },
         { status: 403 }
       );

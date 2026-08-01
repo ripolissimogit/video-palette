@@ -82,6 +82,10 @@ export async function GET() {
       ok: true,
       output: ytdlpActive === "yt-dlp" ? "system yt-dlp" : ytdlpActive,
     };
+    checks.ytdlp_tmp_exists = {
+      ok: existsSync(ytdlpPath),
+      output: existsSync(ytdlpPath) ? "present" : "not found",
+    };
     const versionCmd = ytdlpActive === "yt-dlp" ? "yt-dlp" : `"${ytdlpActive}"`;
     checks.ytdlp_version = run(`${versionCmd} --version`);
   } catch (e: unknown) {

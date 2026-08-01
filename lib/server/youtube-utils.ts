@@ -68,8 +68,15 @@ function readTrimmedEnv(name: string): string | null {
   return raw ? raw : null;
 }
 
+function buildYtDlpRuntimeArgs(): string[] {
+  const configuredRuntime = readTrimmedEnv("YTDLP_JS_RUNTIME");
+  const runtime = configuredRuntime || `nodejs:${process.execPath}`;
+
+  return runtime ? ["--js-runtimes", runtime] : [];
+}
+
 function buildYtDlpOptionalArgs(extractorArgs: string | null): string[] {
-  const args: string[] = [];
+  const args: string[] = [...buildYtDlpRuntimeArgs()];
 
   const cookiesFile = readTrimmedEnv("YTDLP_COOKIES_FILE");
   if (cookiesFile) {

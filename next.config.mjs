@@ -5,6 +5,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // The public Colorificio route is a Cloudflare proxy. Keep the app's assets
+  // on its dedicated Vercel origin so they cannot collide with the main site.
+  assetPrefix: process.env.VERCEL ? "https://video-palette.vercel.app" : undefined,
   images: {
     unoptimized: true,
   },

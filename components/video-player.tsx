@@ -19,22 +19,33 @@ import {
   extractColorsFromCanvas,
   extractColorsAsync,
 } from "@/lib/color-extractor";
+import {
+  getCoverCrop,
+  getPreset,
+  moveCrop,
+  scaleCrop,
+  type SocialPresetId,
+} from "@/lib/social-composition";
 import type { VideoSourceKind } from "./video-dropzone";
 
 // --- Crop handles ---
 // Handles are always at the canvas edges. Dragging inward crops more, outward uncrop.
 
-type HandleType = "top" | "bottom" | "left" | "right" | "tl" | "tr" | "bl" | "br";
+type HandleType = "move" | "top" | "bottom" | "left" | "right" | "tl" | "tr" | "bl" | "br";
 
 function CropHandles({
   crop,
   videoFraction,
+  presetId,
+  videoDims,
   onCropChange,
   onResetCrop,
   onDragEnd,
 }: {
   crop: CropBounds;
   videoFraction: number;
+  presetId: SocialPresetId;
+  videoDims: { w: number; h: number };
   onCropChange: (crop: CropBounds) => void;
   onResetCrop: () => void;
   onDragEnd: () => void;
@@ -49,6 +60,8 @@ function CropHandles({
 
   const MIN_VISIBLE = 0.05;
   const hasCrop = crop.top > 0 || crop.bottom > 0 || crop.left > 0 || crop.right > 0;
+  const preset = getPreset(presetId);
+  const isLockedToPreset = !!preset.videoAspectRatio;
 
   const startDrag = useCallback(
     (type: HandleType, e: React.PointerEvent<HTMLDivElement>) => {
@@ -73,6 +86,20 @@ function CropHandles({
       const dy = ((e.clientY - drag.startY) / rect.height) * scaleY;
       const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
       const n: CropBounds = { ...s };
+
+      if (isLockedToPreset) {
+        if (drag.type === "move") {
+          onCropChange(moveCrop(s, dx, dy));
+          return;
+        }
+        const cornerDelta =
+          drag.type === "tl" ? dx + dy :
+          drag.type === "tr" ? -dx + dy :
+          drag.type === "bl" ? dx - dy :
+          -dx - dy;
+        onCropChange(scaleCrop(s, videoDims.w, videoDims.h, preset, clamp(1 - cornerDelta, 0.1, 1)));
+        return;
+      }
 
       // Symmetric resize: dragging one side affects the opposite side equally.
       const affectsHorizontal =
@@ -117,7 +144,7 @@ function CropHandles({
 
       onCropChange(n);
     },
-    [onCropChange]
+    [isLockedToPreset, onCropChange, preset, videoDims.h, videoDims.w]
   );
 
   const endDrag = useCallback(() => {
@@ -164,6 +191,16 @@ function CropHandles({
         pointerEvents: "none",
       }}
     >
+      {isLockedToPreset && (
+        <div
+          onPointerDown={(e) => startDrag("move", e)}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          className="absolute inset-0 cursor-move"
+          style={{ pointerEvents: "auto", touchAction: "none", zIndex: 1 }}
+          aria-label="Drag to reposition video"
+        />
+      )}
       {hasCrop && (
         <button
           onClick={onResetCrop}
@@ -175,11 +212,13 @@ function CropHandles({
         </button>
       )}
 
-      {/* Edge handles — always at 0% / 50% / 100% of the overlay */}
-      {mkHandle("top",    "50%", "0%",   40, 10, "ns-resize")}
-      {mkHandle("bottom", "50%", "100%", 40, 10, "ns-resize")}
-      {mkHandle("left",   "0%",  "50%",  10, 40, "ew-resize")}
-      {mkHandle("right",  "100%","50%",  10, 40, "ew-resize")}
+      {/* Edge handles are only available for the freeform original canvas. */}
+      {!isLockedToPreset && <>
+        {mkHandle("top", "50%", "0%", 40, 10, "ns-resize")}
+        {mkHandle("bottom", "50%", "100%", 40, 10, "ns-resize")}
+        {mkHandle("left", "0%", "50%", 10, 40, "ew-resize")}
+        {mkHandle("right", "100%", "50%", 10, 40, "ew-resize")}
+      </>}
 
       {/* Corner handles */}
       {mkHandle("tl", "0%",   "0%",   14, 14, "nwse-resize")}
@@ -203,6 +242,7 @@ interface VideoPlayerProps {
   colorCount: number;
   colors: RGB[];
   userCrop: CropBounds;
+  presetId: SocialPresetId;
   extractionSettings?: ExtractionSettings;
   onCropChange: (crop: CropBounds) => void;
   onColorsExtracted: (colors: RGB[]) => void;
@@ -218,6 +258,7 @@ export function VideoPlayer({
   colorCount,
   colors,
   userCrop,
+  presetId,
   extractionSettings,
   onCropChange,
   onColorsExtracted,
@@ -234,6 +275,7 @@ export function VideoPlayer({
   const colorsRef = useRef<RGB[]>(colors);
   const colorCountRef = useRef(colorCount);
   const userCropRef = useRef<CropBounds>(userCrop);
+  const presetRef = useRef(getPreset(presetId));
   const settingsRef = useRef<ExtractionSettings | undefined>(extractionSettings);
   const ewmaRef = useRef<RGB[]>([]);
   const prevSentRef = useRef<RGB[]>([]);
@@ -245,6 +287,11 @@ export function VideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoDims, setVideoDims] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    if (!videoDims.w || !videoDims.h) return;
+    onCropChange(getCoverCrop(videoDims.w, videoDims.h, getPreset(presetId)));
+  }, [onCropChange, presetId, videoDims.h, videoDims.w]);
 
   useEffect(() => {
     colorCountRef.current = colorCount;
@@ -274,7 +321,10 @@ export function VideoPlayer({
     const bottomPx = Math.round(crop.bottom * vh);
     const cropW = Math.max(1, vw - leftPx - rightPx);
     const cropH = Math.max(1, vh - topPx - bottomPx);
-    const pH = Math.round(cropW / k);
+    const preset = presetRef.current;
+    const pH = preset.videoAspectRatio
+      ? Math.round(cropH * preset.paletteFraction / (1 - preset.paletteFraction))
+      : Math.round(cropW / k);
 
     if (canvas.width !== cropW || canvas.height !== cropH + pH) {
       canvas.width  = cropW;
@@ -291,6 +341,11 @@ export function VideoPlayer({
       ctx.fillRect(Math.round(i * swatchW), cropH, Math.ceil(swatchW), pH);
     });
   }, []);
+
+  useEffect(() => {
+    presetRef.current = getPreset(presetId);
+    drawPreview();
+  }, [presetId, drawPreview]);
 
   // Sync colorsRef and redraw when colors change
   useEffect(() => {
@@ -614,7 +669,12 @@ export function VideoPlayer({
   const cropBotPx   = Math.round(userCrop.bottom * videoDims.h);
   const cropW = Math.max(1, videoDims.w - cropLeftPx - cropRightPx);
   const cropH = Math.max(1, videoDims.h - cropTopPx  - cropBotPx);
-  const palettePixelH = videoDims.w > 0 ? Math.round(cropW / colorCount) : 0;
+  const activePreset = getPreset(presetId);
+  const palettePixelH = videoDims.w > 0
+    ? activePreset.videoAspectRatio
+      ? Math.round(cropH * activePreset.paletteFraction / (1 - activePreset.paletteFraction))
+      : Math.round(cropW / colorCount)
+    : 0;
   const totalCanvasH  = cropH + palettePixelH;
   const canvasAspect  = videoDims.w > 0 ? `${cropW} / ${totalCanvasH}` : "16 / 9";
   const videoFraction = totalCanvasH > 0 ? cropH / totalCanvasH : 1;
@@ -680,8 +740,10 @@ export function VideoPlayer({
           <CropHandles
             crop={userCrop}
             videoFraction={videoFraction}
+            presetId={presetId}
+            videoDims={videoDims}
             onCropChange={onCropChange}
-            onResetCrop={() => onCropChange({ top: 0, bottom: 0, left: 0, right: 0 })}
+            onResetCrop={() => onCropChange(getCoverCrop(videoDims.w, videoDims.h, getPreset(presetId)))}
             onDragEnd={handleCropDragEnd}
           />
         )}

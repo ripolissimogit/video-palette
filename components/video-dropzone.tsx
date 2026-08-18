@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getVideoPaletteApiUrl } from "@/lib/video-palette-origin";
 import { Upload, Film, Link, Loader2, AlertCircle } from "lucide-react";
 
 export type VideoSourceKind =
@@ -81,11 +82,11 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       let sourceKind: VideoSourceKind;
       if (mergedStreamUrl) {
         setLoadingMessage("Downloading high-quality stream...");
-        streamRes = await fetch(mergedStreamUrl, { cache: "no-store" });
+        streamRes = await fetch(getVideoPaletteApiUrl(mergedStreamUrl), { cache: "no-store" });
         sourceKind = "youtube-merged";
       } else if (fallbackStreamUrl) {
         setLoadingMessage("HQ merge failed, loading fallback stream...");
-        streamRes = await fetch("/api/youtube", {
+        streamRes = await fetch(getVideoPaletteApiUrl("/api/youtube"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ streamUrl: fallbackStreamUrl }),
@@ -117,7 +118,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
         }
 
         const pollRes = await fetch(
-          `/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}`,
+          getVideoPaletteApiUrl(`/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}`),
           { cache: "no-store" }
         );
         const pollData = await pollRes.json().catch(() => null);
@@ -148,7 +149,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
       const finalStreamUrl =
         status === "ready"
           ? mergedStreamUrl ||
-            `/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}&stream=1`
+            getVideoPaletteApiUrl(`/api/youtube/jobs?jobId=${encodeURIComponent(pending.jobId)}&stream=1`)
           : null;
 
       const { streamRes, sourceKind } = await fetchFinalYouTubeStream(
@@ -208,7 +209,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
   const handleYouTubeUrl = useCallback(async (trimmed: string) => {
     // Step 1: Get video info and stream URL from Piped API
     setLoadingMessage(getYouTubeLoadingMessage("info"));
-    const infoRes = await fetch(`/api/youtube?url=${encodeURIComponent(trimmed)}`);
+    const infoRes = await fetch(getVideoPaletteApiUrl(`/api/youtube?url=${encodeURIComponent(trimmed)}`));
     const infoData = await infoRes.json();
 
     if (!infoRes.ok) {
@@ -220,7 +221,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
 
     // Step 2: Start async merge job and poll for readiness
     setLoadingMessage(getYouTubeLoadingMessage("stream"));
-    const jobRes = await fetch("/api/youtube/jobs", {
+    const jobRes = await fetch(getVideoPaletteApiUrl("/api/youtube/jobs"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -296,7 +297,7 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
 
   const handleDirectUrl = useCallback(async (trimmed: string) => {
     setLoadingMessage("Loading");
-    const proxyUrl = `/api/proxy-video?url=${encodeURIComponent(trimmed)}`;
+    const proxyUrl = getVideoPaletteApiUrl(`/api/proxy-video?url=${encodeURIComponent(trimmed)}`);
 
     // Verify the URL is reachable and is a video
     const res = await fetch(proxyUrl, { method: "GET", headers: { Range: "bytes=0-1023" } });

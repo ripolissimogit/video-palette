@@ -9,6 +9,7 @@ import { ColorCountSelector } from "./color-count-selector";
 import { ExportPanel } from "./export-panel";
 import { ThemeToggle } from "./theme-toggle";
 import { Film, Settings2, ChevronDown, RotateCcw } from "lucide-react";
+import { SOCIAL_PRESETS, type SocialPresetId } from "@/lib/social-composition";
 
 // --- Extraction controls UI ---
 
@@ -286,6 +287,41 @@ const DEFAULT_COLORS: RGB[] = [
 
 const DEFAULT_CROP: CropBounds = { top: 0, bottom: 0, left: 0, right: 0 };
 
+function SocialFormatSelector({
+  value,
+  onChange,
+}: {
+  value: SocialPresetId;
+  onChange: (value: SocialPresetId) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 pb-4" aria-label="Formato del canvas">
+      <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Formato finale</span>
+      <div className="flex flex-wrap gap-1.5">
+        {SOCIAL_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            onClick={() => onChange(preset.id)}
+            className={`rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+              preset.id === value
+                ? "bg-foreground text-background font-medium"
+                : "bg-secondary text-muted-foreground hover:text-foreground"
+            }`}
+            aria-pressed={preset.id === value}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      {value !== "original" && (
+        <p className="text-xs text-muted-foreground">
+          Trascina il video per posizionarlo; usa gli angoli per lo zoom. Palette inclusa nel formato finale.
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface VideoPaletteAppProps {
   title?: string;
   subtitle?: string;
@@ -301,6 +337,7 @@ export function VideoPaletteApp({
   const [colors, setColors] = useState<RGB[]>(DEFAULT_COLORS);
   const [colorCount, setColorCount] = useState(5);
   const [userCrop, setUserCrop] = useState<CropBounds>(DEFAULT_CROP);
+  const [socialPresetId, setSocialPresetId] = useState<SocialPresetId>("original");
   const [extractionSettings, setExtractionSettings] = useState<ExtractionSettings>(DEFAULT_EXTRACTION_SETTINGS);
   const latestColorsRef = useRef<RGB[]>(DEFAULT_COLORS);
   const latestVideoSrcRef = useRef<string | null>(null);
@@ -342,6 +379,7 @@ export function VideoPaletteApp({
     setVideoName(name);
     setVideoSourceKind(meta?.sourceKind ?? null);
     setUserCrop(DEFAULT_CROP);
+    setSocialPresetId("original");
   }, []);
 
   const handleCropChange = useCallback((crop: CropBounds) => {
@@ -369,6 +407,7 @@ export function VideoPaletteApp({
     setColors(DEFAULT_COLORS);
     latestColorsRef.current = DEFAULT_COLORS;
     setUserCrop(DEFAULT_CROP);
+    setSocialPresetId("original");
   }, [videoSrc]);
 
   const handleColorCountChange = useCallback((count: number) => {
@@ -424,6 +463,8 @@ export function VideoPaletteApp({
                   colorCount={colorCount}
                   colors={colors}
                   userCrop={userCrop}
+                  presetId={socialPresetId}
+                  onPresetChange={setSocialPresetId}
                 />
               </>
             )}
@@ -466,6 +507,9 @@ export function VideoPaletteApp({
           <div className="max-w-6xl mx-auto flex flex-col xl:flex-row gap-6 xl:gap-8">
             {/* Video column */}
             <div className="flex-1 min-w-0">
+              {!isFullscreen && (
+                <SocialFormatSelector value={socialPresetId} onChange={setSocialPresetId} />
+              )}
               <div
                 ref={fullscreenContainerRef}
                 className={isFullscreen ? "bg-background h-screen w-screen flex flex-col" : ""}
@@ -477,6 +521,7 @@ export function VideoPaletteApp({
                     colorCount={colorCount}
                     colors={colors}
                     userCrop={userCrop}
+                    presetId={socialPresetId}
                     extractionSettings={extractionSettings}
                     onCropChange={handleCropChange}
                     onColorsExtracted={handleColorsExtracted}

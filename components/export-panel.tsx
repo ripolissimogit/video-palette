@@ -7,8 +7,6 @@ import {
   Square,
   ChevronDown,
   Hash,
-  Smartphone,
-  Monitor,
   FileVideo,
 } from "lucide-react";
 import {
@@ -19,8 +17,8 @@ import {
   extractColorsFromCanvas,
   matchColorOrder,
 } from "@/lib/color-extractor";
+import { SOCIAL_PRESETS, getPreset, type SocialPresetId } from "@/lib/social-composition";
 
-type AspectRatioOption = "original" | "instagram4x5";
 type ExportFormat = "webm" | "mp4" | "mov";
 
 interface ExportFormatOption {
@@ -36,6 +34,8 @@ interface ExportPanelProps {
   colorCount: number;
   colors: RGB[];
   userCrop: CropBounds;
+  presetId: SocialPresetId;
+  onPresetChange: (presetId: SocialPresetId) => void;
 }
 
 function getSupportedMimeType(candidates: string[]): string | null {
@@ -160,10 +160,11 @@ export function ExportPanel({
   colorCount,
   colors,
   userCrop,
+  presetId,
+  onPresetChange,
 }: ExportPanelProps) {
   const [open, setOpen] = useState(false);
   const [showHex, setShowHex] = useState(true);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>("original");
   const [exportFormat, setExportFormat] = useState<ExportFormat>("webm");
   const [state, setState] = useState<
     "idle" | "analyzing" | "recording" | "processing"
@@ -196,7 +197,7 @@ export function ExportPanel({
   }, []);
 
   const exportVideo = useCallback(
-    async (hex: boolean, ratio: AspectRatioOption, format: ExportFormat) => {
+    async (hex: boolean, format: ExportFormat) => {
       abortRef.current = false;
       setOpen(false);
 
@@ -229,6 +230,7 @@ export function ExportPanel({
       const rawW = video.videoWidth;
       const rawH = video.videoHeight;
       const dur = video.duration;
+      const preset = getPreset(presetId);
 
       // Apply user crop
       const cropSx = Math.round(userCrop.left * rawW);
@@ -247,27 +249,15 @@ export function ExportPanel({
       let videoX: number, videoY: number, drawW: number, drawH: number;
       let barsY: number, paletteH: number;
 
-      if (ratio === "instagram4x5") {
-        canvasW = Math.min(vw, 1080);
-        canvasH = Math.round(canvasW * 1.25);
-
-        const barsH = Math.round(canvasH * 0.15);
-        paletteH = barsH;
-
-        const videoAreaH = canvasH - barsH;
-        const videoAR = vw / vh;
-        const areaAR = canvasW / videoAreaH;
-
-        if (videoAR >= areaAR) {
-          drawW = canvasW;
-          drawH = Math.round(canvasW / videoAR);
-        } else {
-          drawH = videoAreaH;
-          drawW = Math.round(videoAreaH * videoAR);
-        }
-
-        videoX = Math.round((canvasW - drawW) / 2);
-        videoY = Math.round((videoAreaH - drawH) / 2);
+      if (preset.width && preset.height) {
+        canvasW = preset.width;
+        canvasH = preset.height;
+        paletteH = Math.round(canvasH * preset.paletteFraction);
+        const videoAreaH = canvasH - paletteH;
+        drawW = canvasW;
+        drawH = videoAreaH;
+        videoX = 0;
+        videoY = 0;
         barsY = videoAreaH;
       } else {
         canvasW = vw;
@@ -422,8 +412,8 @@ export function ExportPanel({
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        const ratioSuffix = ratio === "instagram4x5" ? "-4x5" : "";
-        a.download = `video-palette${ratioSuffix}.${activeFormat.extension}`;
+        const presetSuffix = preset.id === "original" ? "" : `-${preset.id}`;
+        a.download = `video-palette${presetSuffix}.${activeFormat.extension}`;
         a.click();
         URL.revokeObjectURL(url);
         setState("idle");
@@ -447,12 +437,7 @@ export function ExportPanel({
         setProgress(0.5 + (dur > 0 ? (now / dur) * 0.5 : 0)); // 50-100%
 
         // 0. Fill background (dark padding for 4:5 mode)
-        if (ratio === "instagram4x5") {
-          ctx.fillStyle = "#0d0d0d";
-          ctx.fillRect(0, 0, canvasW, canvasH);
-        }
-
-        // 1. Draw video frame (cropped to remove letterbox)
+        // 1. Draw video frame from the same crop used by preview and palette analysis.
         ctx.drawImage(
           video,
           renderSx,
@@ -505,7 +490,7 @@ export function ExportPanel({
         video.src = "";
       };
     },
-    [videoSrc, colorCount, colors, userCrop, formatOptions]
+    [videoSrc, colorCount, colors, userCrop, formatOptions, presetId]
   );
 
   const handleCancel = useCallback(() => {
@@ -517,8 +502,8 @@ export function ExportPanel({
   }, []);
 
   const handleExport = useCallback(() => {
-    exportVideo(showHex, aspectRatio, exportFormat);
-  }, [showHex, aspectRatio, exportFormat, exportVideo]);
+    exportVideo(showHex, exportFormat);
+  }, [showHex, exportFormat, exportVideo]);
 
   // --- Active state UI ---
   if (state !== "idle") {
@@ -614,19 +599,15 @@ export function ExportPanel({
 
             <div className="flex flex-col gap-1.5">
               <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider px-1">
-                Aspect ratio
+                Formato canvas
               </span>
-              <div className="flex gap-1.5">
-                {([
-                  { id: "original" as const, label: "Original", icon: Monitor },
-                  { id: "instagram4x5" as const, label: "4:5", icon: Smartphone },
-                ]).map((opt) => {
-                  const Icon = opt.icon;
-                  const selected = aspectRatio === opt.id;
+              <div className="grid grid-cols-2 gap-1.5">
+                {SOCIAL_PRESETS.map((opt) => {
+                  const selected = presetId === opt.id;
                   return (
                     <button
                       key={opt.id}
-                      onClick={() => setAspectRatio(opt.id)}
+                      onClick={() => onPresetChange(opt.id)}
                       className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
                         selected
                           ? "bg-foreground/10 text-foreground"
@@ -634,7 +615,6 @@ export function ExportPanel({
                       }`}
                       aria-pressed={selected}
                     >
-                      <Icon className="w-3.5 h-3.5" />
                       <span className="font-medium">{opt.label}</span>
                     </button>
                   );

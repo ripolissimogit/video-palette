@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getVideoPaletteApiUrl } from "@/lib/video-palette-origin";
+import { VIDEO_INTERACTION_LAYERS } from "@/lib/video-interaction-layers";
 import { Upload, Film, Link, Loader2, AlertCircle } from "lucide-react";
 
 export type VideoSourceKind =
@@ -50,7 +51,6 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState("");
   const [loadingMessage, setLoadingMessage] = useState("Loading");
-  const inputRef = useRef<HTMLInputElement>(null);
   const resumeStartedRef = useRef(false);
 
   const savePendingJob = useCallback((job: PendingYouTubeJob) => {
@@ -389,7 +389,6 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
           onDrop={handleDrop}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
-          onClick={() => inputRef.current?.click()}
           className={`relative cursor-pointer rounded-xl border-2 border-dashed transition-all duration-300 flex flex-col items-center justify-center py-20 px-8 ${
             isDragging
               ? "border-primary bg-primary/5 scale-[1.01]"
@@ -397,10 +396,10 @@ export function VideoDropzone({ onVideoSelect }: VideoDropzoneProps) {
           }`}
         >
           <input
-            ref={inputRef}
             type="file"
             accept="video/*"
-            className="hidden"
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            style={{ zIndex: VIDEO_INTERACTION_LAYERS.fileInput }}
             onChange={handleInputChange}
           />
           <div className="flex flex-col items-center gap-4">

@@ -26,6 +26,7 @@ import {
   scaleCrop,
   type SocialPresetId,
 } from "@/lib/social-composition";
+import { VIDEO_INTERACTION_LAYERS } from "@/lib/video-interaction-layers";
 import type { VideoSourceKind } from "./video-dropzone";
 
 // --- Crop handles ---
@@ -174,7 +175,7 @@ function CropHandles({
         cursor,
         pointerEvents: "auto",
         touchAction: "none",
-        zIndex: 10,
+        zIndex: VIDEO_INTERACTION_LAYERS.cropHandle,
       }}
     />
   );
@@ -197,7 +198,7 @@ function CropHandles({
           onPointerMove={moveDrag}
           onPointerUp={endDrag}
           className="absolute inset-0 cursor-move"
-          style={{ pointerEvents: "auto", touchAction: "none", zIndex: 1 }}
+          style={{ pointerEvents: "auto", touchAction: "none", zIndex: VIDEO_INTERACTION_LAYERS.cropMoveSurface }}
           aria-label="Drag to reposition video"
         />
       )}
@@ -770,6 +771,7 @@ export function VideoPlayer({
         {/* Remove button */}
         <button
           onClick={onRemove}
+          style={{ zIndex: VIDEO_INTERACTION_LAYERS.remove }}
           className="absolute top-3 right-3 w-8 h-8 rounded-lg bg-secondary/80 backdrop-blur-sm flex items-center justify-center text-foreground hover:bg-secondary transition-colors"
           aria-label="Remove video"
         >
